@@ -1,0 +1,121 @@
+---
+name: frame-daily-art
+description: >
+  每日自動為三星 Frame TV 生成藝術海報並上傳。觸發詞：frame art、今日畫作、換海報、frame tv、幫我換畫、daily art、生成海報。
+  流程：用 Nano Banana 2（Gemini Flash Image）生成直式 9:16 藝術風格圖像 →
+  存到 Vault Deliverables → 上傳到 Frame TV → 推 LINE Flex 預覽。
+  cron 模式：每日 07:00 自動觸發，不需人工介入。
+  不觸發：查詢電視狀態（用 samsung-smartthings）、播音樂（用 sonoscli）。
+requires:
+  bins: [uv, python3]
+  env: [GEMINI_API_KEY]
+  config: []
+owner: dema
+complexity: M
+version: "1.0"
+created: "2026-03-23"
+---
+
+# frame-daily-art
+
+每日藝術海報生成 + Frame TV 上傳。替換舊版 `samsung-smartthings/scripts/daily-art-random.py`，改用 Nano Banana 2 本地生圖，徹底消除外部 API timeout 問題。
+
+## 設計動機
+
+舊版從 Artvee / Met Museum 抓圖，流程：搜尋 → 下載大圖 → PIL 合成 → 上傳，耗時 30–120 秒，cron timeout 頻發。  
+新版改為 AI 生圖：prompt → Nano Banana 2 生成 → 直接上傳，預計 15–30 秒完成。
+
+## 前置條件
+
+- `GEMINI_API_KEY` 環境變數（Nano Banana 2 需要）
+- `samsungtvws` pipx 環境已安裝（upload_to_frame.py 依賴）
+- Frame TV 與 Mac 在同一局域網
+
+## Step 1：生成藝術圖像（Nano Banana 2）
+
+```bash
+source ~/.openclaw/.env
+TODAY=$(date +%Y-%m-%d)
+STYLE_SEED=$((RANDOM % 8))  # 0-7，對應 8 種風格輪換
+
+# 風格池（每天輪換）
+STYLES=(
+  "impressionist oil painting, soft brushstrokes, warm golden light"
+  "ukiyo-e woodblock print, bold outlines, flat colors"
+  "art nouveau illustration, organic flowing lines, botanical motifs"
+  "baroque portrait style, dramatic chiaroscuro lighting"
+  "Chinese ink wash painting, minimalist, misty mountains"
+  "watercolor landscape, loose washes, atmospheric perspective"
+  "fauvism, vivid contrasting colors, expressive brushwork"
+  "realism portrait, rich texture, museum quality"
+)
+STYLE="${STYLES[$STYLE_SEED]}"
+
+OUTPUT_PATH="$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Obsidian Vault/90_System/Deliverables/media/frame-art-${TODAY}.png"
+
+uv run ~/.openclaw/skills/nano-banana-2/scripts/generate_image.py \
+  --prompt "Fine art masterpiece, ${STYLE}, portrait orientation, 9:16 aspect ratio, suitable for gallery wall display, no text, no watermark" \
+  --filename "$OUTPUT_PATH" \
+  --resolution 2K
+```
+
+## Step 2：確認圖像生成成功
+
+```bash
+if [ ! -f "$OUTPUT_PATH" ]; then
+  echo "ERROR: 圖像生成失敗" >&2
+  exit 1
+fi
+echo "圖像生成成功：$OUTPUT_PATH"
+```
+
+## Step 3：上傳到 Frame TV
+
+```bash
+UPLOAD_SCRIPT=~/.openclaw/skills/samsung-smartthings/scripts/upload_to_frame.py
+$FRAME_TV_PYTHON "$UPLOAD_SCRIPT" "$OUTPUT_PATH"
+UPLOAD_EXIT=$?
+
+if [ $UPLOAD_EXIT -ne 0 ]; then
+  echo "WARN: Frame TV 上傳失敗（TV 可能離線），圖已存 Deliverables" >&2
+fi
+```
+
+## Step 4：推 LINE Flex 預覽
+
+```bash
+PUBLIC_URL="https://vault.life-os.work/90_System/Deliverables/media/frame-art-${TODAY}.png"
+python3 ~/.openclaw/workspace/scripts/send-frame-flex.py \
+  "$PUBLIC_URL" \
+  "Daily Art — ${TODAY}" \
+  "${STYLE}" \
+  "$CHAT_ID"
+```
+
+## 錯誤處理
+
+| 情境 | 處理 |
+|------|------|
+| GEMINI_API_KEY 無效 | exit 1，推 LINE 錯誤 |
+| Nano Banana 生圖失敗 | 重試一次（不同 prompt），仍失敗則 exit 1 |
+| Frame TV 離線/拒連 | 警告但不 exit 1（圖已存，等 TV 上線） |
+| 圖像解析度不足 | 強制 --resolution 2K，應不發生 |
+
+## 輸出規範
+
+- 圖像存放：`Vault/90_System/Deliverables/media/frame-art-YYYY-MM-DD.png`
+- 公開 URL：`https://vault.life-os.work/90_System/Deliverables/media/frame-art-YYYY-MM-DD.png`
+- LINE 推播：Flex Message，hero 圖 + 標題 + 風格描述
+- 日誌：stdout 成功訊息，stderr 錯誤
+
+## 安全等級
+
+- 生圖、存檔：🟢 green
+- 推 LINE：🟢 green（Reply/Push 皆可，cron 用 Push）
+- Frame TV 上傳：🟡 yellow（設備操作）
+
+## 參考文件
+
+- `references/style-pool.md` — 風格池完整定義與輪換規則
+- 舊版實作：`~/.openclaw/skills/samsung-smartthings/scripts/daily-art-random.py`
+- Nano Banana 2：`~/.openclaw/skills/nano-banana-2/SKILL.md`
