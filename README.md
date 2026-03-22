@@ -7,7 +7,9 @@
 ```bash
 git clone https://github.com/khpr/lobster-skills.git
 cd lobster-skills
-./install.sh <skill-name>
+./install.sh list
+./install.sh install <skill-name>
+./install.sh status
 ```
 
 ## 可用 Skill
@@ -21,5 +23,6 @@ cd lobster-skills
 
 ```bash
 git pull
-./install.sh <skill-name> # 重新安裝即覆蓋更新
+./install.sh update <skill-name> # symlink 會指回 repo；pull 後通常不必做，但可用來修正狀態
+./install.sh status
 ```
