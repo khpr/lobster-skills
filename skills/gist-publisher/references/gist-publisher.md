@@ -6,6 +6,7 @@
 
 ## 行為
 - 以「檔案路徑（盡量轉成 workspace 相對路徑）」當 key，寫入 `gist-index/map.json`
+- Publish 前會先從「中央 map gist」同步最新 map；publish 後再推回中央 gist（確保德瑪/小蝦共用同一份對照表，避免重複建立 gist）
 - 之後對同一檔案再次發布，預設走 `gh gist edit <id>` 更新內容（不新增 gist）
 
 ## 分享策略
