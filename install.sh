@@ -1,109 +1,99 @@
 #!/usr/bin/env bash
-# install.sh — lobster-skills 管理工具
-# 支援：install / uninstall / update / list / status
-# bash 3.2 相容（macOS 內建）
+# install.sh — lobster-skills installer (symlink based)
+#
+# Commands:
+#   ./install.sh list
+#   ./install.sh status
+#   ./install.sh install <skill-name>
+#   ./install.sh uninstall <skill-name>
+#   ./install.sh update <skill-name>
+#
 set -euo pipefail
 
-REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
-SKILLS_DIR="$REPO_DIR/skills"
-MANAGED="$HOME/.openclaw/skills"
-
-CMD="${1:-}"
-SKILL="${2:-}"
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+SRC_DIR="$ROOT/skills"
+DEST_DIR="$HOME/.openclaw/skills"
 
 usage() {
-  cat <<EOF
-usage: $0 <command> [skill-name]
-
-commands:
-  install <skill>    symlink skill 到 ~/.openclaw/skills/
-  uninstall <skill>  移除 symlink（不刪 repo 原檔）
-  update <skill>     重新 link（git pull 後用）
-  list               列出所有可安裝的 skill
-  status             列出目前已安裝的 skill
-EOF
-  exit 2
+  echo "usage: $0 <list|status|install|uninstall|update> [skill-name]" >&2
 }
 
-check_skill() {
-  if [[ -z "$SKILL" ]]; then
-    echo "❌ 需要指定 skill 名稱" >&2
-    usage
-  fi
-  if [[ ! -d "$SKILLS_DIR/$SKILL" ]]; then
-    echo "❌ skill 不存在：$SKILL" >&2
-    echo "可用：$(ls "$SKILLS_DIR/")" >&2
-    exit 1
-  fi
+list_skills() {
+  ls "$SRC_DIR" 2>/dev/null || true
 }
 
-cmd_install() {
-  check_skill
-  SRC="$SKILLS_DIR/$SKILL"
-  DEST="$MANAGED/$SKILL"
-  if [[ -e "$DEST" ]] || [[ -L "$DEST" ]]; then
-    echo "⚠️  已存在：$DEST（用 update 重新 link）"
-    exit 1
-  fi
-  ln -sf "$SRC" "$DEST"
-  echo "✅ 安裝完成（symlink）：$DEST → $SRC"
-}
-
-cmd_uninstall() {
-  check_skill
-  DEST="$MANAGED/$SKILL"
-  if [[ ! -L "$DEST" ]] && [[ ! -e "$DEST" ]]; then
-    echo "⚠️  未安裝：$SKILL"
-    exit 1
-  fi
-  rm -f "$DEST"
-  echo "✅ 已卸載：$SKILL（repo 原檔保留）"
-}
-
-cmd_update() {
-  check_skill
-  DEST="$MANAGED/$SKILL"
-  SRC="$SKILLS_DIR/$SKILL"
-  rm -f "$DEST"
-  ln -sf "$SRC" "$DEST"
-  echo "✅ 已更新 symlink：$DEST → $SRC"
-}
-
-cmd_list() {
-  echo "=== 可安裝的 skill ==="
-  for d in "$SKILLS_DIR"/*/; do
-    name="$(basename "$d")"
-    owner=""
-    if [[ -f "$d/SKILL.md" ]]; then
-      owner=$(grep "^owner:" "$d/SKILL.md" 2>/dev/null | head -1 | sed 's/owner: *//' | tr -d '"' || true)
-    fi
-    if [[ -n "$owner" ]]; then
-      echo "  $name  [$owner]"
+status() {
+  mkdir -p "$DEST_DIR"
+  echo "managed skills dir: $DEST_DIR"
+  echo
+  for s in $(list_skills); do
+    local dest="$DEST_DIR/$s"
+    if [[ -L "$dest" ]]; then
+      local target
+      target=$(readlink "$dest" || true)
+      echo "✓ $s -> $target"
+    elif [[ -d "$dest" ]]; then
+      echo "! $s (installed as directory, not symlink)"
     else
-      echo "  $name"
+      echo "· $s (not installed)"
     fi
   done
 }
 
-cmd_status() {
-  echo "=== 已安裝的 skill ==="
-  for link in "$MANAGED"/*/; do
-    [[ -d "$link" ]] || continue
-    name="$(basename "$link")"
-    if [[ -L "$link" ]]; then
-      target="$(readlink "$link")"
-      echo "  ✅ $name  → $target"
-    else
-      echo "  📦 $name  (非 symlink)"
-    fi
-  done
+install_skill() {
+  local s=${1:-}
+  if [[ -z "$s" ]]; then usage; exit 2; fi
+  local src="$SRC_DIR/$s"
+  local dest="$DEST_DIR/$s"
+  if [[ ! -d "$src" ]]; then
+    echo "❌ skill 不存在：$s" >&2
+    echo "available: $(list_skills)" >&2
+    exit 1
+  fi
+  mkdir -p "$DEST_DIR"
+
+  # If a real directory exists (not a symlink), move it aside to avoid nested links.
+  if [[ -e "$dest" && ! -L "$dest" ]]; then
+    local ts
+    ts=$(date +%Y%m%d-%H%M%S)
+    local trash="$HOME/.openclaw/_trash/skills"
+    mkdir -p "$trash"
+    mv "$dest" "$trash/${s}-${ts}"
+    echo "⚠️ moved existing directory to: $trash/${s}-${ts}" >&2
+  fi
+
+  ln -sf "$src" "$dest"
+  echo "✅ 安裝完成（symlink）：$dest -> $(readlink "$dest")"
 }
 
-case "$CMD" in
-  install)   cmd_install ;;
-  uninstall) cmd_uninstall ;;
-  update)    cmd_update ;;
-  list)      cmd_list ;;
-  status)    cmd_status ;;
-  *)         usage ;;
+uninstall_skill() {
+  local s=${1:-}
+  if [[ -z "$s" ]]; then usage; exit 2; fi
+  local dest="$DEST_DIR/$s"
+  if [[ -L "$dest" ]]; then
+    rm "$dest"
+    echo "✅ 已移除 symlink：$dest"
+  else
+    echo "(no symlink) $dest" >&2
+  fi
+}
+
+update_skill() {
+  local s=${1:-}
+  if [[ -z "$s" ]]; then usage; exit 2; fi
+  # symlink mode: update == reinstall (re-point link)
+  install_skill "$s"
+}
+
+cmd=${1:-}
+shift || true
+
+case "$cmd" in
+  list) list_skills ;;
+  status) status ;;
+  install) install_skill "${1:-}" ;;
+  uninstall) uninstall_skill "${1:-}" ;;
+  update) update_skill "${1:-}" ;;
+  -h|--help|help|"") usage; exit 0 ;;
+  *) usage; exit 2 ;;
 esac
