@@ -100,5 +100,19 @@ Body 建議章節：
 
 ## A5. 跨機器同步機制（建議）
 
-- **技能同步**：以 `lobster-skills` repo 為單一真相；每台機器 `git pull` 後用 `install.sh status/update` 對齊。
-- **共享狀態檔**（例如 gist-publisher 的 map）：用「中央資源」同步（Gist/Drive）而不是各機器各一份。
+### 單一真相（SSOT）
+- **以 `lobster-skills` repo 為單一真相（Single Source of Truth）**。
+- 同名 skill（例如 `vault-git-sync`）在兩台機器上必須指向同一份 repo 內容；避免各自本機改出「同名不同實作」。
+
+### 同步流程
+- 建立方在本機開發/測試後 commit（只改 repo 內檔案）
+- 推到 repo（shared skill 建議走 PR 或至少在 commit message 標註 WO）
+- 另一台 `git pull`
+- 看需求決定是否 `./install.sh install <skill>`（未 install 的 skill 不會被 Gateway 載入）
+
+### 迭代紀錄
+- **主要以 Git commit history 作為迭代紀錄**（誰改、何時改、改了什麼）。
+- `CHANGELOG.md` 僅在「使用者可感知的行為變更」時選用；否則 git log 已足夠。
+
+### 共享狀態檔
+- 需要跨機器共享狀態時（例如 gist-publisher 的 map），用「中央資源」同步（Gist/Drive），不要各機器各一份。
