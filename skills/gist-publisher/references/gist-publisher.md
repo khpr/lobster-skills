@@ -22,6 +22,8 @@
 - 發布能力矩陣：`scripts/publish-gist.sh docs/capability-matrix.md`
 - 發布 triad 文件：`scripts/publish-gist.sh docs/tools/triad.md`
 
-## 疑難排解
+## 疑難排解 / 踩坑
 - 若 `gh auth status` 不是 khpr：先 `gh auth login`
 - 若被要求重新授權：確認 scopes 需含 `gist`
+- `gh gist create` **沒有 `--secret` flag**：不加 `--public` 時預設就是 secret gist
+- `gh gist view --raw` 需加 `--filename lobster-gist-map.json`：否則可能輸出 gist description，造成 JSON parse 失敗
