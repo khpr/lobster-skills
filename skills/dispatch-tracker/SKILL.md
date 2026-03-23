@@ -8,7 +8,7 @@ description: >
   Owner: shared；使用 skills/dispatch-tracker/scripts/main.sh（不寫死 workspace 路徑）。
 requires:
   bins: [bash, grep, sed]
-  env: [OPENCLAW_WORKSPACE]
+  env: []
   config: []
 owner: shared
 complexity: S
@@ -24,6 +24,7 @@ created: "2026-03-22"
 ## 前置條件
 
 - 追蹤簿路徑（預設）：`$OPENCLAW_WORKSPACE/memory/pending-dispatches.md`
+- 若未設定 `OPENCLAW_WORKSPACE`，預設使用 `~/.openclaw/workspace`
 
 ## 流程
 
