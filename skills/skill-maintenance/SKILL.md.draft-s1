@@ -1,0 +1,33 @@
+---
+name: skill-maintenance
+description: >
+  (WO-037 S1 draft) TODO: describe what this skill does and all trigger phrases.
+owner: shared
+complexity: M
+version: "0.1"
+created: "2026-03-22"
+---
+
+# skill-maintenance
+
+## 概述
+TODO
+
+## 前置條件
+見 frontmatter。
+
+## 流程
+### Step 1
+TODO
+
+## 輸出規範
+TODO
+
+## 錯誤處理
+TODO
+
+## 安全等級
+TODO: green / yellow / red
+
+## 參考文件
+- （如有）references/*.md
