@@ -22,23 +22,34 @@ updated: "2026-03-23"
 ## 這個技能能幹嘛（白話）
 
 OpenClaw 有 BOOT/交接紙條（例如 BOOT.md），裡面通常有「上一輪的摘要」。
-你要的是：
-- **把摘要放進長期記憶（MEMORY.md）**
-- **不要重複貼同一份摘要**
-- 重啟後我才不會失憶、也不會讓 MEMORY.md 變成垃圾堆
 
-這個技能就是做「交接摘要 → 長期記憶」的同步。
+依照 Walkpod 的記憶分層規則：
+- `memory/YYYY-MM-DD.md` 是「日常流水」
+- `MEMORY.md` 是「長期精選（教訓/決策/原則）」
+
+所以這個技能預設只做：
+- **把 BOOT 的交接摘要寫進當日 daily 檔（不污染 MEMORY.md）**
+- **同一份摘要不會重複寫入（去重）**
+
+另外保留彈性：
+- 你明確要求時，才把某次交接摘要「晉升」進 `MEMORY.md`
 
 ## 做法
-- 從 `$OPENCLAW_WORKSPACE/BOOT.md` 擷取「摘要區塊」（找得到就取，找不到就整份當摘要）
-- 以 `## 交接摘要 @ YYYY-MM-DD` 的格式 append 到 `$OPENCLAW_WORKSPACE/MEMORY.md`
-- 會在 MEMORY.md 寫入一個去重 marker（同一份摘要不會重複追加）
+1) 從 `$OPENCLAW_WORKSPACE/BOOT.md` 擷取摘要區塊（找不到就整份當摘要）
+2) Append 到 `$OPENCLAW_WORKSPACE/memory/YYYY-MM-DD.md`
+3) 用 marker 去重：同一份摘要不會一直重複追加
 
 ## 使用方式
-- `OPENCLAW_WORKSPACE=~/.openclaw/workspace bash scripts/main.sh`
+- 寫入 daily（預設）：
+  - `OPENCLAW_WORKSPACE=~/.openclaw/workspace bash scripts/main.sh`
+- 晉升到 MEMORY（可選、明確操作）：
+  - `OPENCLAW_WORKSPACE=~/.openclaw/workspace bash scripts/main.sh --promote`
 
 ## 安全等級
 green（只會寫入你本機的記憶檔案，不會對外發送）
+
+## 權限建議
+- `MEMORY.md` 建議鎖權限（例如 600），避免被其他流程誤讀/誤改。
 
 ## 相關檔案
 - 腳本：`scripts/main.sh`
