@@ -1,0 +1,95 @@
+---
+name: runbook
+description: 故障排除 Runbook。收到錯誤訊息後自動查 Log、定位問題、輸出結構化報告。觸發詞：報錯、error、掛了、Exception、crash、失敗、異常、timeout、502、503、掛掉、壞掉、不動了。
+---
+
+# Runbook — 自動化故障排除
+
+腳本：`bash ~/.openclaw/skills/runbook/scripts/diagnose.sh "<錯誤描述>"`
+
+## 觸發條件
+
+使用者訊息含以下任一關鍵字時啟動：
+- 中文：報錯、掛了、掛掉、壞掉、不動了、失敗、異常、當機
+- 英文：error、exception、crash、timeout、failed、not working
+- HTTP：502、503、500、404（搭配問題描述）
+
+## 使用方式
+
+```bash
+bash ~/.openclaw/skills/runbook/scripts/diagnose.sh "<錯誤描述關鍵字>"
+```
+
+**範例：**
+```bash
+# 查 LINE webhook 相關錯誤
+bash ~/.openclaw/skills/runbook/scripts/diagnose.sh "line webhook"
+
+# 查 gateway crash
+bash ~/.openclaw/skills/runbook/scripts/diagnose.sh "gateway crash"
+
+# 查所有近期錯誤（無關鍵字模式）
+bash ~/.openclaw/skills/runbook/scripts/diagnose.sh ""
+```
+
+## 運作流程
+
+1. 接收錯誤描述（關鍵字或完整錯誤訊息）
+2. 掃描 Log 位置：
+   - `~/.openclaw/logs/`（如存在）
+   - `~/.openclaw/workspace/dashboard/logs/`
+   - `/tmp/openclaw-*.log`（臨時 log）
+3. 過濾相關錯誤行（ERROR、WARN、Exception、關鍵字）
+4. 輸出結構化報告：
+   - 時間戳
+   - 錯誤類型分類
+   - Log 摘要（最近 20 筆）
+   - 建議行動
+
+## 輸出格式
+
+```
+=== 🔍 Runbook 診斷報告 ===
+時間：2026-03-20 20:00:00
+關鍵字：<輸入的錯誤描述>
+
+【錯誤類型】
+...
+
+【Log 摘要】（最近相關 20 筆）
+...
+
+【建議行動】
+1. ...
+2. ...
+
+【Log 來源】
+...
+=========================
+```
+
+## 常見故障快查
+
+| 症狀 | 關鍵字 | 常見原因 |
+|------|--------|---------|
+| Gateway 沒回應 | gateway | crash loop、port 衝突 |
+| LINE 無回覆 | line webhook | token 過期、webhook URL 失效 |
+| Gemini 失敗 | gemini 429 | Rate limit，等待後重試 |
+| n8n 掛了 | n8n | Docker container 停止 |
+| 腳本執行失敗 | permission | chmod 未設 |
+
+## 依賴
+
+- `grep`、`tail`、`find`（系統內建）
+- `jq`（選用，解析 JSON log）
+- Log 位置需存在且有讀取權限
+
+## Gotchas
+- 執行前先確認前置檔案/旗標存在；缺少時直接回報並停止，不要硬做。
+- 需要改檔時先備份（.bak），避免錯誤覆寫不可回復。
+- 回覆外部訊息前，先完成核心產出檔落地，避免「只說完成但無檔案」。
+- 若模型或 API 出現 rate limit / 400 錯誤，改用備援模型並重跑，不要把空跑當成功。
+
+## Confirmation Gate
+- 涉及刪除資料、改動系統設定、重啟服務、安裝/升降版時，先回覆「⚠️ 風險 + 待確認動作」，取得人類確認後才執行。
+- 未取得確認時僅提供診斷與建議，不直接下高風險指令。

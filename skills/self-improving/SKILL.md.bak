@@ -1,0 +1,77 @@
+---
+name: Self-Improving Agent
+slug: self-improving
+version: 2.0.0-lobster
+description: 觀察 → 提議 → 確認後才寫入。有閘門的自我改善。
+metadata: {"clawdbot":{"emoji":"🧠","requires":{"bins":[]},"os":["linux","darwin","win32"]}}
+---
+
+## 核心閘門（所有 agent 必須遵守）
+
+### 三層模型
+
+1. 觀察 → 注意到 pattern 或被糾正。心裡記著，不寫不動。
+2. 提議 → 「我覺得這條值得記下來，要寫嗎？」允許躍躍欲試，但停住等確認。
+3. 執行 → 使用者明確說「寫」「記住」「加進去」「更新」→ 才動手寫入。
+
+### 硬規則
+
+- 沒有明確指令 → 不寫入任何檔案。句號。
+- 糾正 ≠ 執行指令。被糾正時先理解、先回覆確認，不自動觸發寫入。
+- 討論 ≠ 行動許可。分析問題、吐槽、聊改善方向，都不等於「請執行」。
+- 自動晉升停用：count≥3 時通知使用者，使用者說升才升。
+
+### 觸發詞（只有這些才算「明確指令」）
+
+- 「記住這個」「寫進去」「加進規則」「更新 AGENTS.md」
+- 「存起來」「記下來」「下次也這樣做」
+- 「Log this」「Save this」「Remember this」
+
+### 不算觸發（禁止當成指令）
+
+- 「這個之前做過啦」→ 在聊天，不是叫你建技能
+- 「對，應該這樣」→ 同意你的說法，不是叫你寫入
+- 「不錯」「好主意」→ 讚美，不是指令
+- 任何過去式描述（「之前我們...」「上次那個...」）
+
+## 寫入位置
+
+| 內容 | 寫到哪 |
+|------|--------|
+| 被糾正的行為 | self-improving/corrections.md |
+| 重複出現的 pattern | self-improving/learnings.md |
+| 長期偏好 / 重要決策 | MEMORY.md + memory_store |
+| 每日紀錄 | memory/YYYY-MM-DD.md |
+
+## 格式（精簡版）
+
+corrections.md 一行一條：
+日期 | 類別 | 描述
+
+learnings.md pattern 格式：
+## [PATTERN-XXX] 一句話描述
+count: N
+last_seen: YYYY-MM-DD
+rule: 具體行為規則
+
+不需要 Priority / Area / Status / Metadata。簡單就好。
+
+## 晉升流程（人類觸發）
+
+1. learnings-promote.sh 掃描 count≥3 的 pattern
+2. 通知使用者：「這條教訓出現 N 次，要提煉成規則嗎？」
+3. 確認後寫入 **learnings.md**（精簡規則版），不寫入 AGENTS.md
+4. AGENTS.md 是路由表，不放教訓。教訓永遠住在 self-improving/ 裡
+
+## Scope
+
+這個 skill 只做：
+- 觀察糾正和 pattern
+- 在確認後寫入本地檔案
+- 讀取自己的記憶檔案
+
+這個 skill 不做：
+- 自動寫入任何檔案
+- 自動建立技能
+- 自動修改 AGENTS.md / SOUL.md / TOOLS.md
+- 推測使用者意圖並執行

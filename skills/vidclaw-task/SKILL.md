@@ -1,0 +1,63 @@
+---
+name: vidclaw-task
+description: VidClaw 任務板操作：建卡、認領、結案、派工。觸發詞：看板子、認領任務、check board、建卡、結案。
+metadata: {"clawdbot":{"emoji":"📋"}}
+---
+
+# VidClaw 任務板操作
+
+腳本：`bash ~/.openclaw/workspace/scripts/vidclaw-task.sh`
+API：http://127.0.0.1:3333/api/tasks
+完整 SOP：`~/.openclaw/workspace-lobster/docs/SOP-VIDCLAW.md`
+
+## 基本用法
+
+- 列表：`vidclaw-task.sh list [status]`（todo/in-progress/done/all）
+- 建卡：`vidclaw-task.sh create "標題" "描述" [priority] [status]`
+- 更新：`vidclaw-task.sh update <id> <field>=<value>`
+- 數量：`vidclaw-task.sh count`
+- 查任務板 = 跑 vidclaw-task.sh list，不是讀 board.json 或 TASKS.json
+
+## 認領任務
+
+收到「看板子」「認領任務」「check board」時：
+1. `vidclaw-task.sh list todo` 找 assignee 是自己 agent ID 的卡
+2. 有卡 → `vidclaw-task.sh update <id> status=in-progress` → 開始做
+3. 沒卡 → 回「板子上沒有指派給我的任務」
+
+## 建立任務
+
+- `vidclaw-task.sh create "標題" "描述" [priority] [status]`
+- `vidclaw-task.sh update <id> assignee=<agent-id>`
+- priority：low / medium / high，status：預設 todo
+- assignee：必須是 openclaw.json 裡的合法 agent ID
+- 描述要寫清楚驗收標準（什麼叫「做完」）
+
+## 結案（強制，不可省略）
+
+- 做完 → `vidclaw-task.sh update <id> status=done note="產出摘要"`
+- 卡住 → `vidclaw-task.sh update <id> status=blocked note="卡住原因"`
+- ⚠️ 任務完成後「立刻」移板子。不移板子 = 沒做完。
+- 同時在 memory/YYYY-MM-DD.md 寫一行 `## ✅ [任務名] DONE (HH:MM)`
+
+## 派工（德米專屬）
+
+德米建卡後透過 sessions_spawn 或對應 LINE 群組通知 worker。
+Worker 不需要等通知——收到「認領任務」就自己去撈。
+
+## Gotchas
+- 執行前先確認前置檔案/旗標存在；缺少時直接回報並停止，不要硬做。
+- 需要改檔時先備份（.bak），避免錯誤覆寫不可回復。
+- 回覆外部訊息前，先完成核心產出檔落地，避免「只說完成但無檔案」。
+- 若模型或 API 出現 rate limit / 400 錯誤，改用備援模型並重跑，不要把空跑當成功。
+
+## 危險操作確認閘
+- 涉及刪卡、批次改寫、外部系統變更時，先回覆「⚠️ 風險」與影響範圍，取得確認再執行。
+- 未確認前只允許查詢與規劃，不執行破壞性更新。
+## 安全 Hook 整合（WO-035）
+高風險操作執行前，呼叫安全閘門：
+```bash
+bash ~/.openclaw/workspace/scripts/security-gate-hook.sh red '操作描述'
+# exit 2 = 等待確認，不得繼續
+# exit 0 = 綠線，可執行
+```

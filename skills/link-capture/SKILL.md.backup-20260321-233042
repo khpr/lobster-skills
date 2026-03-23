@@ -1,0 +1,192 @@
+---
+name: link-capture
+description: "Auto-detect and capture social media posts, news articles, blog posts, and tutorials from shared URLs. Supports Threads, X, Instagram, Facebook, Dcard, PTT, Reddit, Bilibili, Zhihu, news sites, blogs. Trigger on any URL detected in conversation. Captures full text, comments, and images. Saves to Obsidian _inbox/, replies in LINE-friendly conversational style."
+metadata: {"clawdbot":{"emoji":"🔗"}}
+---
+
+# Link Capture（連結捕抓）
+
+## 觸發條件
+
+偵測到訊息中包含 URL，且 URL 屬於以下平台或內容類型：
+
+### 平台識別
+
+| Pattern | 平台 | 捕抓策略 |
+|---------|------|----------|
+| threads.com | Threads | **curl 直抓**（OG tags + ServerJS JSON，不需登入不需 Relay）→ Step 2D |
+| twitter.com, x.com | X | xurl 優先，Browser Relay 備援 |
+| instagram.com/p/, /reel/ | Instagram | embed endpoint + escaped JSON 解析（Step 2C） |
+| facebook.com, fb.com | Facebook | **curl 直抓**（需 Sec-Fetch headers）→ Step 2E |
+| dcard.tw | Dcard | **openclaw browser**（Cloudflare 擋 curl，需走 Browser Relay）→ Step 2G |
+| ptt.cc | PTT | **curl 直抓**（需 over18 cookie）→ Step 2F |
+| zhihu.com | 知乎 | **curl 直抓**（initialData JSON 含全文）→ Step 2H |
+| reddit.com | Reddit | web_fetch 優先，失敗 → Browser Relay |
+| bilibili.com | Bilibili | web_fetch 優先，失敗 → Browser Relay |
+| 其他（新聞/部落格/教學）| 通用 | web_fetch 優先，403/失敗 → Browser Relay |
+
+## 捕抓流程
+
+### Step 1：辨識連結類型
+從 URL pattern 判斷平台，決定捕抓策略。
+
+### Step 2：擷取內容（按平台路由）
+
+IG 硬性規則（必遵守）：
+- Instagram 一律走 `refs/platform-instagram.md` 的 embed+escaped JSON 流程。
+- 禁止使用或建議 Browser Relay。
+- 若輸出含「Relay / 無法抓 / 只能首圖」但未提供 `slides>=2` 的實測結果，視為流程違規。
+
+依 Step 1 識別結果，讀取對應平台的擷取指南：
+
+| 平台 | 參考文件 | 一句話摘要 |
+|------|----------|-----------|
+| X/Twitter | `refs/platform-x.md` | xurl → curl OG → web_fetch → Relay，四層降級 |
+| Instagram | `refs/platform-instagram.md` | embed JSON 抽全輪播 + 圖片 OCR，暫存 /tmp/link-capture/ig/ |
+| Threads | `refs/platform-threads.md` | curl 一次搞定，ServerJS JSON 藏全文 |
+| Facebook | `refs/platform-facebook.md` | 必須帶 Sec-Fetch headers，否則只拿到 Error 頁 |
+| PTT | `refs/platform-ptt.md` | 最乾淨，帶 over18 cookie 即可 |
+| Dcard | `refs/platform-dcard.md` | Cloudflare 擋 curl，必須走 openclaw browser |
+| 知乎 | `refs/platform-zhihu.md` | initialData JSON 含全文 |
+| 其他 | 通用流程 | curl OG → web_fetch → Browser Relay |
+
+**通用降級順序**（非專用平台）：
+1. curl OG tags
+2. web_fetch 嘗試抓全文
+3. Browser Relay（最後手段，需 Chrome 外掛 attach）
+
+### Step 3：圖片處理
+
+**預設不下載圖片**——只在 frontmatter 記錄 `og_image` URL。
+
+例外（需下載到 91_Attachments）：
+1. **資訊圖表**：流程圖、對照表、數據視覺化等文字無法完整還原的內容
+2. **來源可能消失**：限時動態、可能被刪的帖子
+3. **使用者自己的照片/截圖**
+
+下載規則（僅例外情境）：
+  1. 用 exec curl 下載到 `/Users/Modema11434/Library/Mobile Documents/iCloud~md~obsidian/Documents/Obsidian Vault/90_System/91_Attachments/`
+  2. 檔名格式：`YYYY-MM-DD-正規化標題-01.jpg`
+  3. 在筆記的「圖片描述」區塊加入 `![[91_Attachments/檔名]]` 嵌入連結
+
+不下載時：
+  - frontmatter 加 `og_image: "原始圖片URL"`
+  - 筆記「圖片描述」區塊用 `image` 工具分析後寫文字描述，不嵌入本地圖片
+  - 如需回看圖片，透過原始 URL 即可
+
+### Step 4：AI 生成摘要 + Tags
+- 正規化標題（適合 AI 索引，繁體中文）
+- 500 字完整摘要
+- 3 個語意 tag（AI 依內容自動生成，繁體中文）
+- 留言精華（社群平台）
+
+### Step 5：儲存至 Obsidian 00_Inbox/
+路徑：`/Users/Modema11434/Library/Mobile Documents/iCloud~md~obsidian/Documents/Obsidian Vault/00_Inbox/`
+
+檔名格式：`YYYY-MM-DD-正規化標題.md`
+
+Frontmatter 格式：
+```yaml
+---
+source: threads | x | instagram | facebook | dcard | ptt | news | blog
+platform: 平台名稱
+url: 原始連結
+author: 作者名稱
+date: YYYY-MM-DD
+captured: YYYY-MM-DDTHH:mm:ss+08:00
+interactions:
+  likes: 66
+  comments: 11
+  shares: 26
+metrics:              # 選填，xurl 取得時自動填入
+  likes: 0
+  replies: 0
+  retweets: 0
+  quotes: 0
+tags:
+  - tag1
+  - tag2
+  - tag3
+status: inbox
+---
+```
+
+內文格式：
+```markdown
+## 摘要
+
+（約 500 字完整摘要）
+
+## 留言精華
+
+- 留言者A：內容
+- 留言者B：內容
+
+## 圖片描述
+
+- [1] 描述...
+
+## 原文
+
+（如有完整原文，貼在這裡）
+```
+
+### Step 5.5：寫入 VidClaw 任務板（自動收藏）
+
+偵測到 URL 並成功擷取 OG metadata 後，**強制執行**以下指令將連結加入 VidClaw 任務板：
+
+```bash
+bash ~/.openclaw/workspace/scripts/vidclaw-task.sh create "收藏：[正規化標題]" "來源：[原始URL] \n摘要：https://vault.life-os.work/00_Inbox/[檔名] \n備註：自動擷取收藏。" high done
+```
+
+**規則**：
+1. **強制性**：不論使用者是否要求，只要觸發 `link-capture` 並產出 Obsidian 檔案，就必須同步建卡。
+2. **狀態**：預設設為 `done`（已完成），因為擷取動作已在當下執行完畢。
+3. **優先級**：預設為 `high`。
+4. **連動**：描述中必須包含指向 Vault 的公開 URL，方便從 Dashboard 直接點擊閱讀。
+
+### Step 6：LINE 回覆（自然口語摘要）
+
+使用 Reply API 回覆，採用自然口語風格，包含：
+- **正規化標題**
+- **約 300 字完整摘要**（排版 30-50 字一段、3-4 段，方便手機閱讀）
+- 結尾標示「🔗 已收藏」
+
+**範例**：
+> **[標題]**
+> 
+> 這篇文章主要討論了...（摘要第一段）
+> 
+> 此外還提到...（摘要第二段）
+> 
+> 最後結論是...（摘要第三段）
+> 
+> 🔗 已收藏
+
+### Step 7：Quick Reply
+
+回覆摘要後掛載 Quick Reply：
+
+```
+[[quick_replies: 📖 檢視收藏, 📝 完整摘要]]
+```
+- 「📖 檢視收藏」→ 開 LIFF 收藏頁 `https://liff.line.me/2009180162-NOKBzIPQ?page=links`
+- 「📝 完整摘要」→ 若回覆時未提供完整內容，點選後產出或顯示 Obsidian 收藏路徑
+
+### Step 8：存 Keep / 存 Docs 原則
+
+**一律原文照搬，不改寫不潤飾。**
+把抓到的原文、摘要、留言原封不動存入，不用自己的話轉存。
+
+### 注意事項
+
+- Browser Relay 需要 Chrome 開著且外掛已 attach tab
+- 如果 Relay 不可用，回覆「需要開 Chrome + Browser Relay 才能抓這個連結」
+- 社群平台可能需要登入才能看完整留言，未登入時抓到多少算多少
+- 圖片暫存在 /tmp/link-capture/，不長期保留
+- X API 免費版 Rate Limit 15 次/15 分鐘，超限時 xurl 會失敗，自動降級到 Step 2A-1（curl OG tags）
+- 一個 turn 只回一則訊息，捕抓結果和回覆合併
+
+## Changelog
+- 2026-03-20: 漸進式揭露重構 — Step 2 各平台擷取細節（507 行）拆到 refs/ 子目錄，主檔從 673 行降至 186 行，節省 ~72% token。
+- 2026-03-20: 移除 media_player 預覽卡，改為直接回覆 300 字摘要，並確保 Quick Reply 專注於檢視與摘要。

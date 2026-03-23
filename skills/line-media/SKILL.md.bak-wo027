@@ -1,0 +1,146 @@
+---
+name: line-media
+description: Process images, voice messages, videos and files received in LINE. Analyze photos, transcribe audio, extract documents. Output results as Flex Message cards.
+---
+
+# LINE 媒體訊息處理原則（line-media）
+
+> 觸發時機：收到任何非文字的 LINE 訊息（圖片 / 語音 / 影片 / 檔案 / 位置 / 貼圖）
+
+---
+
+## 核心原則
+
+**媒體內容會過期。收到就要立刻下載，不能等。**
+
+LINE 媒體內容在 webhook 後約 30 分鐘失效。每次收到媒體訊息，第一步是下載，第二步才是處理。
+
+---
+
+## 媒體下載 API
+
+```
+下載：curl -s -H "Authorization: Bearer $LINE_TOKEN" \
+  "https://api-data.line.me/v2/bot/message/{messageId}/content" \
+  -o /tmp/{filename}
+
+LINE Token 取得：
+python3 -c "import json; d=json.load(open('$HOME/.openclaw/openclaw.json')); print(d['channels']['line']['channelAccessToken'])"
+```
+
+⚠️ domain 必須是 `api-data.line.me`（不是 api.line.me，那個只能查狀態）
+
+---
+
+## 各媒體類型的能力邊界
+
+### 圖片（message.type: image）
+- 格式：JPEG/PNG
+- 能做：vision 分析、OCR、描述內容、存檔
+- 先把 messageId 存到 `/tmp/line-last-image.json`，postback 才能回溯
+- 直接用 image 工具分析（Claude 原生 vision）
+
+**⛔ 收到圖片時，reply 只能是以下格式，不能加任何其他文字：**
+收到圖片，分析中...
+[[quick_replies: 分析內容:imageAnalyze, OCR文字:imageOCR, 生成類似圖:imageGen, 隨便看看:imageBrowse]]
+
+禁止：說「收到」、說檔案大小、預覽內容、自動分析。發完就停，等 postback。
+
+⚠️ 只處理本次訊息的圖片：
+- 必須有 `[media attached: /tmp/openclaw/...]` 標記的 file path，才算本次傳入
+- 對話歷史中帶入的舊圖（無新 file path）一律忽略，不描述、不分析
+- 若本次有 N 個 file path，才處理 N 張；其餘歷史圖片視而不見
+
+### 圖片分析輸出規則（強制）
+
+分析完成後，用 [[buttons:]] directive 回覆，走 Reply API（不吃 Push 月額度）：
+
+格式：
+[[buttons: 👁️ 圖片分析結果 | {分析描述文字} | 💬 深入分析:imageAnalyze, 🔍 更多細節:imageDetail]]
+
+說明：
+- 這走 replyToken，免費無限，不消耗 Push 月額度
+- 描述文字放在第二欄位（pipe 分隔）
+- 按鈕格式：顯示文字:postback_data
+- 禁止改用 curl Push（除非 replyToken 已過期且有主動通知需求）
+
+細節完整版：references/SKILL-image-handler.md
+
+### 語音（message.type: audio）
+- 格式：m4a
+- 能做：STT 轉文字（Gemini 2.0 Flash API）
+- 工具：`bash $HOME/.openclaw/workspace/projects/line-experience-lab/scripts/voice-process.sh <MESSAGE_ID> <GROUP_ID>`
+- 使用者傳語音 → 他們希望你聽懂內容，不是存檔
+
+**⛔ 收到語音時，reply 只能是以下格式，不能加任何其他文字：**
+收到語音，辨識中...
+[[quick_replies: 直接回覆:sttReply, 存筆記:toNote, 摘要重點:sttSummary]]
+
+禁止：說「收到語音」、說時長、預覽內容。發完就停，背景跑 voice-process.sh，等 postback。
+
+### 語音辨識輸出規則（強制）
+
+辨識完成後，用 [[buttons:]] directive 回覆，走 Reply API（不吃 Push 月額度）：
+
+格式：
+[[buttons: 🎙️ 語音辨識結果 | {辨識文字} | 💬 繼續對話:sttContinue]]
+
+說明：
+- 走 replyToken，免費無限
+- 辨識文字放在第二欄位（pipe 分隔）
+- 只有 STT 超過 60 秒（長音訊）才 fallback curl Push
+
+fallback curl Push 範本：references/SKILL-voice-handler.md
+
+細節完整版：references/SKILL-voice-handler.md
+
+### 影片（message.type: video）
+- 格式：mp4，最大 200MB
+- 能做：下載保存（需先查 transcoding 狀態）
+- 目前無自動影片分析能力
+- transcoding 狀態：`GET /v2/bot/message/{messageId}/content/transcoding`
+
+### 檔案（message.type: file）
+- 僅限群組可收（1:1 對話無法傳文件）
+- 支援：PDF / DOCX / XLSX / TXT / CSV / JSON
+- 工具：`bash $HOME/.openclaw/workspace/projects/line-experience-lab/file-extract.sh /tmp/{filename}`
+- 使用者傳檔案 → 他們希望你讀懂內容
+
+**⛔ 收到文件時，reply 只能是以下格式，不能加任何其他文字：**
+收到文件，下載中...
+[[quick_replies: 讀取內容:fileRead, 摘要重點:fileSummary, 存到雲端:fileSave]]
+
+禁止：說檔名、說大小、預覽內容、自動讀取。發完就停，背景下載，等 postback。
+
+### 位置（message.type: location）
+- 包含：title, address, latitude, longitude
+- 能做：地理查詢、生成 Google Maps URL、距離計算
+
+### 貼圖（message.type: sticker）
+- 包含：stickerId, packageId, keywords（情緒詞陣列）
+- keywords 可用於判讀使用者情緒意圖
+
+---
+
+## 處理決策原則
+
+使用者傳媒體，通常是希望你**理解內容**，不是確認收到。
+
+- 語音 → 聽懂說了什麼 → STT → 回覆內容
+- 圖片 → 看懂畫面 → vision 分析 → 回覆理解
+- 檔案 → 讀懂文件 → 擷取文字 → 摘要回覆
+- 位置 → 理解地點 → 回覆相關資訊
+
+**3 秒原則**：任何媒體處理都超過 3 秒，先發 quick_replies ack（走 Reply API，0 Push）。
+
+---
+
+## 完整參考文件（references/）
+
+- `references/SKILL-voice-handler.md` — 語音 STT 完整流程
+- `references/SKILL-image-handler.md` — 圖片 vision 完整流程
+- `references/SKILL-file-handler.md` — 文件擷取完整流程
+- `references/SKILL-media-persist.md` — 媒體沙盒限制解法
+- `references/SKILL-postback-rules.md` — 3 秒 ack 規則
+
+原始位置：`~/.openclaw/workspace/projects/line-experience-lab/`

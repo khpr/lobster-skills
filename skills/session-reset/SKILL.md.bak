@@ -1,0 +1,150 @@
+---
+name: session-reset
+slug: session-reset
+version: 3.0.0
+description: |
+  軟重啟 session。備份記憶 → 通知使用者 → 背景重啟。
+  
+  觸發：重開、重置、reset、重啟、session 掛了、token 快滿了。
+  不觸發：要重開 gateway（用 gateway restart）、要清空記憶（紅線）。
+metadata: {"clawdbot":{"emoji":"🔄"},"openclaw":{"requires":{"bins":["bash"]}}}
+---
+
+# Session Reset（軟重啟）v3 — Watchdog 統一架構
+
+## 核心原則
+
+所有重啟都走同一條路：**context-watchdog.sh**。
+
+agent 自主重啟時透過 **session-reset.sh**（薄殼），它只做熱層記憶 + session-digest，然後呼叫 `context-watchdog.sh --agent <id>`。
+
+底層操作：直接改 sessions.json + 重命名 .jsonl + `openclaw gateway restart`。
+不經 gateway API（`openclaw sessions cleanup` 禁用），不用 `launchctl unload/load`。
+
+```
+session-reset.sh（agent 自主入口）
+  ├─ 熱層記憶（最後 3 輪完整對話）
+  ├─ session-digest
+  └─ context-watchdog.sh --agent <id>
+       ├─ 直接改 sessions.json（Python）
+       ├─ 重命名 .jsonl → .deleted
+       └─ nohup openclaw gateway restart
+```
+
+## 授權
+
+只接受 sender_id = Uab09077d61b168708d6703f0baf8ca03，其他人沉默。
+
+## 觸發方式
+
+### A. 手動觸發
+
+關鍵字：「重開」「重置」「reset」「重啟」「清空記憶」
+
+加 agent 名稱代表指定對象：
+
+- 「重置 gemini」「重開 flash」→ 清 gemini-flash
+- 「重置 gpt」→ 清 gpt
+- 「重置全部」→ 清所有 agent（走 session-cleanup 的 system-restart.sh）
+- 單說「重開」→ 清 lobster 自己
+
+### B. 自動觸發（token 感知）— 僅警告，不自行重啟
+
+Agent **禁止自行呼叫 sessions.reset 或 session-reset.sh**。
+重啟統一由 context-watchdog.sh（cron 每 10 分鐘）負責，避免雙重 reset 競爭條件。
+
+Agent 的職責只有「警告使用者」：
+
+- 50% 以上 → 回覆中附帶預警：「📝 對話累積較多，看門狗會在適當時機軟重啟，不影響你使用。」
+- 60% 以上 → 回覆中提醒：「🔄 記憶體快滿了，看門狗下一輪會自動重啟。」
+- **不要自己跑重啟流程**。watchdog 每 10 分鐘檢查，最慢 10 分鐘內會觸發。
+
+判斷方式：agent 無法精確取得 token 數，用以下啟發式：
+
+- 對話 turn 數超過 30 → 視為 50%
+- 對話 turn 數超過 40，或 agent 感覺 compaction 已發生過 1 次以上 → 視為 60%
+- 若 OpenClaw 有提供 context usage 資訊（如 session metadata），優先使用精確數值
+
+### ⚠️ 為什麼 agent 不能自己重啟
+
+context-watchdog.sh 會呼叫 `sessions.reset` API，觸發 session-memory hook 存記憶。
+如果 agent 也同時觸發重啟，5 秒內 reset 兩次，第二次會覆蓋第一次的記憶存檔（因為中間的 session 只活了幾秒，沒有對話內容）。
+這是 2026-03-15 發現的 bug：雙重 reset 競爭條件導致記憶丟失。
+
+### Agent 名稱對照
+
+| 說法 | agent id |
+|------|----------|
+| gemini / flash / gemini flash | gemini-flash |
+| gemini pro | gemini-pro |
+| gpt | gpt |
+| sonnet | sonnet |
+| minimax | minimax |
+| glm | glm |
+| 全部 / 所有 | all（走 session-cleanup） |
+
+## 執行流程
+
+### 自動觸發：agent 只警告，不動手
+
+agent 感知到 context 50%+ 時，只在回覆中加一句警告。不執行任何重啟操作。
+watchdog cron 每 10 分鐘自動檢查並處理，走 `sessions.reset` API 觸發 session-memory hook。
+
+### 手動觸發：使用者說「重開」「重置」「reset」
+
+#### Step 1：回覆使用者
+
+「收到～正在重啟 {AGENT_ID}。10 秒後傳個訊息就好 🦞」
+
+#### Step 2：呼叫 sessions.reset API
+
+```bash
+openclaw gateway call sessions.reset --params '{"key":"<session-key>"}'
+```
+
+這會觸發 session-memory hook，自動存記憶 + 建新 session。
+
+如果 API 失敗，fallback：
+
+```bash
+nohup bash -c '
+  sleep 3
+  bash ~/.openclaw/workspace/scripts/session-reset.sh '"${AGENT_ID}"'
+' > /tmp/session-reset-$(date +%s).log 2>&1 &
+```
+
+沒有 Step 3。到這裡就結束。
+
+⚠️ 禁止自行組裝 cleanup + restart。禁止呼叫 `openclaw sessions cleanup`。禁止 `launchctl unload/load`。
+
+## 為什麼這樣能跑通
+
+- `nohup ... &` 讓重啟成為獨立背景 process，脫離 agent session
+- `sleep 3` 確保 Step 2 的回覆已透過 Reply API 送出
+- session-reset.sh 先做熱層記憶 + session-digest（gateway 還活著）
+- 然後呼叫 context-watchdog.sh --agent，它直接用 Python 改 sessions.json（不經 API）
+- watchdog 最後 `nohup openclaw gateway restart`，Gateway 被 kill 時腳本已完成
+- launchd 偵測到 Gateway 退出 → 自動重啟
+- 使用者下一則訊息 → 找不到 session → 建新 session → 載入全套 workspace
+
+## 已驗證的事實
+
+- ❌ `openclaw sessions cleanup` 經 gateway API → 重啟時 gateway 起不來（v2 的坑）
+- ❌ `launchctl unload/load` → 手動操作 plist，不穩定
+- ❌ 在 agent session 裡直接跑 gateway restart → kill 自己
+- ✅ 直接改 sessions.json + `openclaw gateway restart` → watchdog 驗證過的可靠路徑
+- ✅ nohup 背景腳本脫離 agent lifecycle → Gateway 被 kill 時不受影響
+- ✅ launchd service 下 Gateway 被 kill 後自動重啟
+
+## 注意事項
+
+- Step 2 絕對必須在 Step 3 之前完成——restart 後這個 session 就死了
+- 如果使用者在 restart 的 2-3 秒內傳訊息，會收到錯誤或無回應，這是正常的
+- 備份寫進 memory/ 日誌，新 session 啟動時會讀到
+- 如果要清全部 agent，改用 session-cleanup 的 system-restart.sh
+
+## Gotchas
+- 執行前先確認前置檔案/旗標存在；缺少時直接回報並停止，不要硬做。
+- 需要改檔時先備份（.bak），避免錯誤覆寫不可回復。
+- 回覆外部訊息前，先完成核心產出檔落地，避免「只說完成但無檔案」。
+- 若模型或 API 出現 rate limit / 400 錯誤，改用備援模型並重跑，不要把空跑當成功。

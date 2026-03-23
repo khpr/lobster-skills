@@ -1,0 +1,126 @@
+---
+name: link-capture
+description: |
+  自動截取社群貼文、新聞、部落格。存到 Obsidian _inbox/。
+  
+  觸發：[自動] 偵測到 URL 時自動啟動、截取網頁、存貼文、摘 article。
+  不觸發：要手動截圖（用 peekaboo）、要下載影片（用 yt-dlp）。
+metadata: {"clawdbot":{"emoji":"🔗"}}
+---
+
+# Link Capture（連結捕抓）
+
+## 觸發條件
+
+偵測到訊息中包含 URL，且 URL 屬於以下平台或內容類型：
+
+### 平台識別
+
+| Pattern | 平台 | 捕抓策略 |
+|---------|------|----------|
+| threads.com | Threads | **curl 直抓**（OG tags + ServerJS JSON，不需登入不需 Relay）→ refs/platform-threads.md |
+| twitter.com, x.com | X | xurl 優先，Browser Relay 備援 → refs/platform-x.md |
+| instagram.com/p/, /reel/ | Instagram | embed endpoint + escaped JSON 解析 → refs/platform-instagram.md |
+| facebook.com, fb.com | Facebook | **curl 直抓**（需 Sec-Fetch headers）→ refs/platform-facebook.md |
+| dcard.tw | Dcard | **openclaw browser**（Cloudflare 擋 curl，需走 Browser Relay）→ refs/platform-dcard.md |
+| ptt.cc | PTT | **curl 直抓**（需 over18 cookie）→ refs/platform-ptt.md |
+| zhihu.com | 知乎 | **curl 直抓**（initialData JSON 含全文）→ refs/platform-zhihu.md |
+| reddit.com | Reddit | web_fetch 優先，失敗 → Browser Relay |
+| bilibili.com | Bilibili | web_fetch 優先，失敗 → Browser Relay |
+| 其他（新聞/部落格/教學）| 通用 | web_fetch 優先，403/失敗 → Browser Relay |
+
+## 捕抓流程
+
+### Step 1：辨識連結類型
+從 URL pattern 判斷平台，決定捕抓策略。
+
+### Step 2：擷取內容（按平台路由）
+
+依 Step 1 識別結果，讀取對應平台的擷取指南（refs/platform-*.md）。
+
+**通用降級順序**（非專用平台）：
+1. curl OG tags
+2. web_fetch 嘗試抓全文
+3. Browser Relay（最後手段，需 Chrome 外掛 attach）
+
+### Step 3：圖片處理
+
+**預設不下載圖片**——只在 frontmatter 記錄 `og_image` URL。
+
+例外（需下載到 91_Attachments）：
+1. **資訊圖表**：流程圖、對照表、數據視覺化等文字無法完整還原的內容
+2. **來源可能消失**：限時動態、可能被刪的帖子
+3. **使用者自己的照片/截圖**
+
+下載規則、檔名格式詳見 refs/storage-rules.md。
+
+### Step 4：AI 生成摘要 + Tags
+- 正規化標題（適合 AI 索引，繁體中文）
+- 500 字完整摘要
+- 3 個語意 tag（AI 依內容自動生成，繁體中文）
+- 留言精華（社群平台）
+
+### Step 5：儲存至 Obsidian 00_Inbox/
+路徑：`/Users/Modema11434/Library/Mobile Documents/iCloud~md~obsidian/Documents/Obsidian Vault/00_Inbox/`
+
+檔名格式：`YYYY-MM-DD-正規化標題.md`
+
+Frontmatter 格式、內文格式詳見主檔原始版本。
+
+### Step 5.5：寫入 VidClaw 任務板（自動收藏）
+
+偵測到 URL 並成功擷取 OG metadata 後，**強制執行**以下指令將連結加入 VidClaw 任務板：
+
+```bash
+bash ~/.openclaw/workspace/scripts/vidclaw-task.sh create "收藏：[正規化標題]" "來源：[原始URL] \n摘要：https://vault.life-os.work/00_Inbox/[檔名] \n備註：自動擷取收藏。" high done
+```
+
+**規則**：
+1. **強制性**：不論使用者是否要求，只要觸發 `link-capture` 並產出 Obsidian 檔案，就必須同步建卡。
+2. **狀態**：預設設為 `done`（已完成），因為擷取動作已在當下執行完畢。
+3. **優先級**：預設為 `high`。
+4. **連動**：描述中必須包含指向 Vault 的公開 URL，方便從 Dashboard 直接點擊閱讀。
+
+### Step 6：LINE 回覆（自然口語摘要）
+
+使用 Reply API 回覆，採用自然口語風格，包含：
+- **正規化標題**
+- **約 300 字完整摘要**（排版 30-50 字一段、3-4 段，方便手機閱讀）
+- 結尾標示「🔗 已收藏」
+
+### Step 7：Quick Reply
+
+回覆摘要後掛載 Quick Reply：
+
+```
+[[quick_replies: 📖 檢視收藏, 📝 完整摘要]]
+```
+
+### Step 8：存 Keep / 存 Docs 原則
+
+**一律原文照搬，不改寫不潤飾。**
+把抓到的原文、摘要、留言原封不動存入，不用自己的話轉存。
+
+### 注意事項
+
+- Browser Relay 需要 Chrome 開著且外掛已 attach tab
+- 如果 Relay 不可用，回覆「需要開 Chrome + Browser Relay 才能抓這個連結」
+- 社群平台可能需要登入才能看完整留言，未登入時抓到多少算多少
+- 圖片暫存在 /tmp/link-capture/，不長期保留
+- X API 免費版 Rate Limit 15 次/15 分鐘，超限時 xurl 會失敗，自動降級到 curl OG tags
+- 一個 turn 只回一則訊息，捕抓結果和回覆合併
+
+## 參考文件（refs/）
+
+各平台詳細擷取流程見 refs/ 目錄：
+- platform-threads.md
+- platform-x.md
+- platform-instagram.md
+- platform-facebook.md
+- platform-ptt.md
+- platform-dcard.md
+- platform-zhihu.md
+
+## Changelog
+- 2026-03-20: 漸進式揭露重構 — Step 2 各平台擷取細節拆到 refs/ 子目錄，主檔從 673 行降至 186 行，節省 ~72% token。
+- 2026-03-20: 移除 media_player 預覽卡，改為直接回覆 300 字摘要，並確保 Quick Reply 專注於檢視與摘要。

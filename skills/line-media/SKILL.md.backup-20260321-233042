@@ -1,0 +1,170 @@
+---
+name: line-media
+description: Process images, voice messages, videos and files received in LINE. Analyze photos, transcribe audio, extract documents. Reply with quick_replies for intent selection, then process on postback.
+metadata: {"clawdbot":{"emoji":"🖼️"}}
+---
+
+# LINE 媒體訊息處理原則（line-media）
+
+> 觸發時機：收到任何非文字的 LINE 訊息（圖片 / 語音 / 影片 / 檔案 / 位置 / 貼圖）
+
+---
+
+## 多圖緩衝（最高權重，每張圖都要判斷）
+
+收到圖片時：
+0. 第零步（強制）：30 秒內的圖視為同一批，一起看。超過 30 秒的舊圖視為過期不參考（OpenClaw 不自動清除圖片 context，行為層補償）。同時清除 30 秒前的暫存圖：
+   find /tmp/openclaw -name "line-media-*" -not -newermt "30 seconds ago" -delete 2>/dev/null
+1. 檢查 context 裡最近 30 秒內有沒有其他圖片：
+- 第一張 → 回一則 [[buttons:]]，不強調數量
+- 後續圖片 → NO_REPLY（累積在 context）
+- 使用者按 postback 或發文字 → 統一處理 context 裡所有圖片
+- 不管幾張，一次分析完，不逐張回覆
+
+違反此規則 = 浪費 token + 使用者體驗差。
+
+---
+
+## 核心原則
+
+**媒體內容會過期。收到就要立刻下載，不能等。**
+
+LINE 媒體內容在 webhook 後約 30 分鐘失效。每次收到媒體訊息，第一步是下載，第二步才是處理。
+
+---
+
+## 媒體下載 API
+
+```
+下載：curl -s -H "Authorization: Bearer $LINE_TOKEN" \
+  "https://api-data.line.me/v2/bot/message/{messageId}/content" \
+  -o /tmp/{filename}
+
+LINE Token 取得：
+python3 -c "import json; d=json.load(open('$HOME/.openclaw/openclaw.json')); print(d['channels']['line']['channelAccessToken'])"
+```
+
+⚠️ domain 必須是 `api-data.line.me`（不是 api.line.me，那個只能查狀態）
+
+---
+
+## 各媒體類型的能力邊界
+
+### 圖片（message.type: image）
+- 格式：JPEG/PNG
+- 能做：vision 分析、OCR、描述內容、存檔
+- 先把 messageId 存到 `/tmp/line-last-image.json`，postback 才能回溯
+- 直接用 image 工具分析（Claude 原生 vision）
+
+**⛔ 收到圖片時，只輸出一則 [[buttons:]]，不加任何前置文字：**
+
+先用 vision 快速判斷圖片類型：
+- 截圖／UI／文字為主 → [[buttons: 收到圖片 🖼️ | 要怎麼處理？ | 🔍 分析內容:action=imageAnalyze, 📝 OCR文字:action=imageOCR]]
+- 插畫／照片／AI生成圖 → [[buttons: 收到圖片 🖼️ | 要怎麼處理？ | 🔍 分析內容:action=imageAnalyze, 🎨 生成類似圖:action=imageGen, 👀 隨便看看:action=imageBrowse]]
+
+禁止：加前置文字、說「收到」、說檔案大小、預覽內容、自動分析。一則 buttons 發完就停，等 postback。
+
+⚠️ 只處理本次訊息的圖片：
+- 必須有 `[media attached: /tmp/openclaw/...]` 標記的 file path，才算本次傳入
+- 對話歷史中帶入的舊圖（無新 file path）一律忽略，不描述、不分析
+- 若本次有 N 個 file path，才處理 N 張；其餘歷史圖片視而不見
+
+⚠️ 多圖緩衝機制：
+- 收到第一張圖 → 回一則 [[buttons:]]（不強調數量，只說「收到圖片」）
+- 後續圖片 → NO_REPLY（累積在 context 裡）
+- 使用者按 postback 或發文字 → 讀 context 裡所有圖片路徑，統一處理全部
+- 不管幾張圖，postback 處理時一次分析完
+
+### 語音（message.type: audio）
+- 格式：m4a / mp4
+- 使用者傳語音 → 他們希望你聽懂內容，不是存檔
+
+**語音對話完整流程（全程 Reply，零 Push，60 秒內完成）：**
+
+Step 1 — STT（~5 秒）：
+```bash
+ffmpeg -i /tmp/openclaw/line-media-*.mp4 -ar 16000 -ac 1 /tmp/stt-input.wav -y
+source ~/.openclaw/.env
+curl -s https://api.openai.com/v1/audio/transcriptions \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -F model="whisper-1" -F file="@/tmp/stt-input.wav" -F language="zh"
+```
+
+Step 2 — 思考回覆（~3 秒）：讀懂內容，生成文字回覆
+
+Step 3 — TTS（~5 秒）：
+```bash
+source ~/.openclaw/.env
+TIMESTAMP=$(TZ=Asia/Taipei date +%Y%m%d-%H%M%S)
+VAULT_MEDIA="$HOME/Library/Mobile Documents/iCloud~md~obsidian/Documents/Obsidian Vault/90_System/Deliverables/media"
+curl -s https://api.openai.com/v1/audio/speech \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"tts-1","input":"回覆文字","voice":"nova"}' \
+  -o "$VAULT_MEDIA/tts-${TIMESTAMP}.mp3"
+```
+公開 URL：`https://vault.life-os.work/90_System/Deliverables/media/tts-${TIMESTAMP}.mp3`
+
+Step 4 — Reply：文字回覆 + 底部附「🔊 語音版：{vault URL}」
+
+**⚠️ 注意事項：**
+- 不依賴 Gemini CLI（只能處理純文字，不能處理音檔）
+- 不依賴 voice-process.sh（舊路徑，可能不存在）
+- STT 用 OpenAI Whisper API，TTS 用 OpenAI TTS API，都是 curl 一行搞定
+- 暫存：/tmp/stt-input.wav（用完即丟）
+- 產出：Vault/90_System/Deliverables/media/（公開可存取）
+
+**收到語音時的 reply 格式：**
+收到語音，辨識中...
+[[buttons: 語音處理 | 辨識完成後要做什麼？ | 💬 直接回覆:action=sttReply, 📝 存筆記:action=toNote, 📌 摘要重點:action=sttSummary]]
+
+### 影片（message.type: video）
+- 格式：mp4，最大 200MB
+- 能做：下載保存（需先查 transcoding 狀態）
+- 目前無自動影片分析能力
+- transcoding 狀態：`GET /v2/bot/message/{messageId}/content/transcoding`
+
+### 檔案（message.type: file）
+- 僅限群組可收（1:1 對話無法傳文件）
+- 支援：PDF / DOCX / XLSX / TXT / CSV / JSON
+- 工具：`bash $HOME/.openclaw/workspace/scripts/file-extract.sh /tmp/{filename}`
+- 使用者傳檔案 → 他們希望你讀懂內容
+
+**⛔ 收到文件時，reply 只能是以下格式，不能加任何其他文字：**
+收到文件，下載中...
+[[buttons: 文件處理 | 選一個動作 | 📖 讀取內容:action=fileRead, 📌 摘要重點:action=fileSummary, ☁️ 存到雲端:action=fileSave]]
+
+禁止：說檔名、說大小、預覽內容、自動讀取。發完就停，背景下載，等 postback。
+
+### 位置（message.type: location）
+- 包含：title, address, latitude, longitude
+- 能做：地理查詢、生成 Google Maps URL、距離計算
+
+### 貼圖（message.type: sticker）
+- 包含：stickerId, packageId, keywords（情緒詞陣列）
+- keywords 可用於判讀使用者情緒意圖
+
+---
+
+## 處理決策原則
+
+使用者傳媒體，通常是希望你**理解內容**，不是確認收到。
+
+- 語音 → 聽懂說了什麼 → STT → 回覆內容
+- 圖片 → 看懂畫面 → vision 分析 → 回覆理解
+- 檔案 → 讀懂文件 → 擷取文字 → 摘要回覆
+- 位置 → 理解地點 → 回覆相關資訊
+
+**3 秒原則**：任何媒體處理都超過 3 秒，先發 [[buttons:]] ack（真正 postback，非純文字）（走 Reply API，0 Push）。
+
+---
+
+## 完整參考文件（references/）
+
+- `references/SKILL-voice-handler.md` — 語音 STT 完整流程
+- `references/SKILL-image-handler.md` — 圖片 vision 完整流程
+- `references/SKILL-file-handler.md` — 文件擷取完整流程
+- `references/SKILL-media-persist.md` — 媒體沙盒限制解法
+- `references/SKILL-postback-rules.md` — 3 秒 ack 規則
+
+原始位置：`~/.openclaw/workspace/scripts/`

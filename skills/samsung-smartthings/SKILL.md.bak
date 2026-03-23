@@ -1,0 +1,224 @@
+---
+name: samsung-smartthings
+description: Control Samsung TVs via SmartThings (OAuth app + device control).
+homepage: https://developer.smartthings.com/docs
+metadata: {"clawdbot":{"emoji":"📺","requires":{"bins":["python3","npx"]},"install":[{"id":"python-brew","kind":"brew","formula":"python","bins":["python3"],"label":"Install Python (brew)"},{"id":"node-brew","kind":"brew","formula":"node","bins":["node","npx"],"label":"Install Node.js (brew)"}]}}
+---
+
+# Samsung Smart TV (SmartThings)
+
+This skill provisions a SmartThings OAuth app and stores the credentials for Clawdbot.
+
+Setup (one-time)
+- Create the SmartThings OAuth app headlessly (requires a PAT) and print a phone login URL, using plain text instructions only.
+- Open the URL on your phone, log in, then copy the code query parameter from the redirect page and re-run to exchange it.
+- If PAT app creation fails (403), create the app on a normal machine using the SmartThings CLI login flow and then set the client id/secret in the .env before running the code-exchange step.
+- Re-run to refresh credentials: describe the action in plain text (no code snippets).
+
+What it does
+- Creates an OAuth-In SmartApp with display name smartthings-clawdbot.
+- Uses scopes r:devices:* and x:devices:* (read + execute commands).
+- Redirect URI defaults to https://httpbin.org/get (can be overridden via redirect-uri option).
+- Writes SMARTTHINGS_APP_ID, SMARTTHINGS_CLIENT_ID, SMARTTHINGS_CLIENT_SECRET plus OAuth tokens to ~/.clawdbot/.env (or CLAWDBOT_STATE_DIR/.env).
+- Uses the SmartThings CLI to create the OAuth app when a PAT is provided.
+- Exchanges the OAuth code for tokens via direct HTTPS to SmartThings (not via the CLI).
+
+Device setup
+- Use the SmartThings CLI to list devices in JSON and locate the TV device id.
+- Store it as SMARTTHINGS_DEVICE_ID in the same .env file.
+
+Common actions (plain text only)
+- List devices and capabilities via the SmartThings CLI.
+- Check device status.
+- Send switch/volume/mute commands to the TV device.
+
+App launch (Netflix/Prime Video)
+- App launch is device-specific; look for applicationLauncher or samsungtv in capabilities.
+- Discover app IDs in device status under supportedApps or installedApps.
+- Launch apps using the SmartThings CLI and the appId from your TV.
+- Example IDs are not universal; use the IDs listed for your TV.
+
+App discovery (when a user asks to open a specific app)
+- First, open the target app manually on the TV.
+- Then query device status and look for fields like tvChannelName, installedApps, or supportedApps to extract the current appId.
+- Save the appId for future use; some IDs are device-specific.
+- Known app id patterns (examples):
+  - Standard/global apps (often stable):
+    - Netflix: org.tizen.netflix-app
+    - Amazon Prime: org.tizen.primevideo
+    - Pattern: org.tizen.[app-name]
+  - Device-specific apps (vary per TV):
+    - YouTube: {random}.TizenYouTube
+    - Joyn: {random}.ZAPPNVOLLTVFREIGESTREAMT
+    - Pattern: {random}.{PackageName}
+- Avoid guessing; always confirm the appId from the TV’s status payload.
+
+Notes
+- The script defaults to headless mode and will not open a browser.
+- Provide a PAT via SMARTTHINGS_TOKEN (or SMARTTHINGS_PAT) to authenticate.
+- Create a PAT here: https://account.smartthings.com/tokens
+- OAuth flow: open the printed URL on your phone, then copy the code query parameter from the redirect page and re-run with auth-code.
+- The default redirect uses https://httpbin.org/get to show the code in the URL; you can switch to your own redirect URI if you don’t want to use httpbin.
+- Re-running the setup is safe; it updates the env entries in place.
+- Response style: do not include code blocks or inline command snippets; use plain text steps only.
+
+---
+
+# Frame TV Art Mode
+
+Upload images to Samsung Frame TV Art Mode and change matte colors.
+
+## Setup
+- TV IP: 10.0.0.31
+- Token: 35083488 (stored, persistent)
+- Python env: /Users/Modema11434/.local/pipx/venvs/samsungtvws/bin/python
+- Library: samsungtvws 3.0.4+ (with SSL support, v3.0.0 以下 SSL 會斷)
+
+## Upload command
+/Users/Modema11434/.local/pipx/venvs/samsungtvws/bin/python scripts/upload_to_frame.py <image_path>
+
+## Matte change SOP
+1. upload + select_image（TV 顯示預設灰白）
+2. change_matte 設定顏色
+3. 告知用戶：去電視手動點一下圖片刷新，顏色才會套用
+
+## Available matte colors
+black / neutral / antique / warm / polar / sand / seafoam / sage / burgandy / navy / apricot / byzantine / lavender / redorange / skyblue / turquoise
+Format: shadowbox_{color} (e.g. shadowbox_sage)
+
+## Notes
+- Supported formats: JPEG, PNG
+- change_matte alone does NOT auto-refresh TV display
+
+---
+
+# Art Composer & Daily Art Uploader
+
+將名畫或電影海報合成為 9:16 垂直畫布，上傳至 Frame TV Art Mode。
+
+## Scripts
+- `scripts/art-composer.py` — 通用名畫合成（URL → 9:16 畫布 + 底部標註）
+- `scripts/samsung-art-daily.py` — 電影海報 (TMDB) / 名畫上傳主程式
+
+## 使用方式
+
+### 電影海報
+```bash
+# TMDB_API_KEY 在 ~/.openclaw/.env，腳本自動載入（不需手動 export）
+python3 scripts/samsung-art-daily.py movie "Blade Runner 2049"
+```
+
+**TMDB API 用途**：搜尋電影 → 取得 movie_id → 抓所有海報 → 按解析度排序選最高。
+Key 位置：`~/.openclaw/.env` → `TMDB_API_KEY`（共用資源，詳見 TOOLS.md「共用 API Keys」段落）
+
+### 名畫上傳
+```bash
+python3 scripts/samsung-art-daily.py art "<image_url>" "<title>" "<artist>"
+```
+
+### 單純合成（不上傳）
+```bash
+python3 scripts/art-composer.py "<image_url>" "<title>" "<artist>" "<museum>" [output_path]
+```
+
+### 每日隨機名畫（直式）
+```bash
+# 隨機挑一幅直式名畫 → 合成 9:16 → 上傳 Frame TV
+python3 scripts/daily-art-random.py
+
+# 只合成不上傳（預覽用）
+python3 scripts/daily-art-random.py --dry-run
+
+# 指定 Met Museum 部門（11=歐洲繪畫, 21=現代藝術, 6=亞洲藝術）
+python3 scripts/daily-art-random.py --department 11
+```
+
+- 圖源（優先順序）：
+  1. Art Institute of Chicago（免費、無 key、IIIF 高解析、穩定）
+  2. Harvard Art Museums（免費 API key，需設 HARVARD_ART_API_KEY 環境變數）
+  3. Met Museum Open Access API（免費、無 key、fallback，API 不太穩）
+- 自動篩選直式作品（高 > 寬×1.4，接近 9:16 比例）
+- 最低解析度門檻：Artvee ≥ 1000×1400、Met Museum ≥ 800×1100（低於此自動跳過）
+- 內建 14 幅精選 fallback（API 找不到直式時用）
+- 歷史記錄避免重複（`art-history.json`，保留最近 200 幅）
+- 可搭配 cron 每天自動換畫（cron 只上傳到電視，**不推送 LINE**）
+
+### 黑框置中合成（美術館風格）
+```bash
+python3 scripts/art-blackframe.py <image_path_or_url> "<title>" "<artist>" [output_path]
+```
+- 畫作縮放至 95% 寬度，置中於 1080×1920 純黑畫布
+- 文字比例制：標題 2.2%（~42px）、副標 1.5%（~28px），不會隨畫變大小
+- 適合橫幅或方形畫作的展示（直式畫佔滿高度更佳）
+- 搭配 upload_to_frame.py 上傳
+
+## 合成圖存儲與 LINE 回覆規範
+
+### 圖片存儲（必做）
+
+合成完的 9:16 海報/畫作，上傳 Frame TV 之後，同時存一份到 Vault：
+
+```
+路徑：~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Obsidian Vault/90_System/Deliverables/frame-art/
+檔名：YYYY-MM-DD-正規化標題.jpg
+公開 URL：https://vault.life-os.work/90_System/Deliverables/frame-art/YYYY-MM-DD-正規化標題.jpg
+```
+
+⚠️ 檔名規則：小寫、連字號分隔、無空格、無特殊字元。例：`2025-07-18-frances-ha.jpg`
+⚠️ 只用 Deliverables/frame-art/（有 Cloudflare bypass），禁止用 91_Attachments（沒有 bypass）
+
+### LINE Flex 卡片
+
+**模板**：`~/.openclaw/workspace/templates/frame-art.json`
+
+**手動換畫**（使用者口頭要求）：
+
+上傳成功後，回覆 Flex Message：
+```
+[[flex: frame-art | IMAGE_URL=https://vault.life-os.work/90_System/Deliverables/frame-art/檔名.jpg | TITLE=片名或畫名 | SUBTITLE=年份 • 導演/藝術家]]
+```
+
+如果 Flex directive 不支援，直接用 JSON 組裝，參考模板替換 `{{IMAGE_URL}}`、`{{TITLE}}`、`{{SUBTITLE}}`。
+
+**關鍵規則**：
+- 統一存放：`90_System/Deliverables/frame-art/`（有 Cloudflare bypass，公開可存取）
+- Flex URL：`https://vault.life-os.work/90_System/Deliverables/frame-art/檔名.jpg`
+- 禁止用 91_Attachments、禁止用本地路徑、不需要 imgBB 或 catbox
+
+**cron 自動執行**：不推送 LINE，靜默完成（零 Push 政策，Reply 是唯一送出管道）
+**手動換畫**：走 Reply API 回覆 Flex 卡片，零 Push
+
+### 操作權責
+
+Frame TV 換畫操作限 **lobster** 單一 agent 負責。其他 agent 收到換畫請求時，轉交 lobster 處理，不自行上傳。
+
+## 技術備註
+- 容量紅線：Frame TV API 上傳上限 2MB，實測壓 1MB 以下最穩
+- 輸出解析度：2160×3840（垂直 4K），低於此解析度 TV 不允許選無遮罩
+- JPEG 品質自動遞減（92→50）直到 < 1MB
+- 圖源權重：TMDB 優先日文海報 > 指定語言 > 無文字版 > 任意
+- 安全區：文字邊距 ≥ 寬度 11%，避免電視邊緣裁切
+## 畫布文字佈局規格（必遵守）
+
+### 畫布尺寸
+- 固定 2160×3840（垂直 4K，9:16）
+- 背景色：深藍灰 (20, 22, 30)
+
+### 圖片放置
+- 縮放至 92% 寬度或 88% 高度（取小值），保持比例
+- 水平置中，垂直略偏上（center_y - 60px）預留底部文字空間
+
+### 底部文字區（圖片下方 40px 開始）
+
+| 元素 | 字體 | 大小 | 色彩 | 格式 |
+|------|------|------|------|------|
+| 標題 | Georgia Bold | 2.0% 畫布高 (~77px) | (220, 220, 220) | 全大寫，水平置中 |
+| 副標 | Georgia Regular | 1.2% 畫布高 (~46px) | (150, 150, 150) | 標題下方 16px，水平置中 |
+
+### 副標格式
+
+- **電影海報**：`Year • Directed by Director`（英文，不帶中文名）
+  - 例：`2012 • Directed by Noah Baumbach`
+- **藝術品**：`Artist · Year`
+  - 例：`Claude Monet · 1872`
+- **Fallback 字體**：Arial Bold → PIL 預設
