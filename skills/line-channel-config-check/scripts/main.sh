@@ -1,127 +1,143 @@
 #!/usr/bin/env bash
-# line-channel-config-check/scripts/main.sh
-# Diagnose and guide repair of LINE channel configuration issues
-# Version: 1.0  Created: 2026-03-23
-# Compatible: bash 3.2+
-
+# line-channel-config-check
+# Read-only health report for OpenClaw LINE channel.
 set -euo pipefail
 
-OPENCLAW_JSON="$HOME/.openclaw/openclaw.json"
+JSON=0
+TIMEOUT_MS="10000"
 
-usage() {
-  echo "Usage: $0 [diagnose|token-check|webhook-check|full]" >&2
-  echo "  diagnose     - Run full diagnosis (default)" >&2
-  echo "  token-check  - Check token validity only" >&2
-  echo "  webhook-check - Check webhook endpoint only" >&2
-  echo "  full         - All checks with verbose output" >&2
-  exit 1
-}
-
-check_deps() {
-  for bin in jq curl; do
-    if ! command -v "$bin" >/dev/null 2>&1; then
-      echo "ERROR: required binary '$bin' not found" >&2
-      exit 2
-    fi
-  done
-}
-
-check_json_readable() {
-  if [ ! -r "$OPENCLAW_JSON" ]; then
-    echo "ERROR: cannot read $OPENCLAW_JSON — check file permissions" >&2
-    exit 2
-  fi
-}
-
-step1_status() {
-  echo "=== Step 1: openclaw status (LINE) ==="
-  openclaw status 2>&1 | grep -A2 "LINE" || echo "(no LINE entry found)"
-  echo ""
-
-  echo "=== LINE config fields present ==="
-  jq '.channels.line | keys' "$OPENCLAW_JSON" 2>/dev/null || echo "(could not parse openclaw.json)"
-  echo ""
-}
-
-step2_token_length() {
-  echo "=== Step 2: Token format check ==="
-  TOKEN_LEN=$(jq '.channels.line.channelAccessToken | length' "$OPENCLAW_JSON" 2>/dev/null || echo 0)
-  echo "channelAccessToken length: $TOKEN_LEN"
-  if [ "$TOKEN_LEN" -eq 0 ]; then
-    echo "WARN: token is empty or null — needs re-issue" >&2
-  elif [ "$TOKEN_LEN" -lt 100 ]; then
-    echo "WARN: token length looks too short (expected 170+)" >&2
-  else
-    echo "OK: token length looks normal"
-  fi
-  echo ""
-}
-
-step3_token_api() {
-  echo "=== Step 3: Token validity (API call) ==="
-  TOKEN=$(jq -r '.channels.line.channelAccessToken // empty' "$OPENCLAW_JSON" 2>/dev/null)
-  if [ -z "$TOKEN" ]; then
-    echo "SKIP: token is empty, cannot call API" >&2
-    return 0
-  fi
-  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-    -H "Authorization: Bearer $TOKEN" \
-    https://api.line.me/v2/bot/info 2>&1)
-  echo "API response code: $HTTP_CODE"
-  if [ "$HTTP_CODE" = "200" ]; then
-    echo "OK: token is valid"
-  elif [ "$HTTP_CODE" = "401" ] || [ "$HTTP_CODE" = "403" ]; then
-    echo "WARN: token invalid or expired (HTTP $HTTP_CODE) — re-issue required" >&2
-  else
-    echo "WARN: unexpected response ($HTTP_CODE)" >&2
-  fi
-  echo ""
-}
-
-step4_webhook() {
-  echo "=== Step 4: Webhook endpoint check ==="
-  TOKEN=$(jq -r '.channels.line.channelAccessToken // empty' "$OPENCLAW_JSON" 2>/dev/null)
-  if [ -z "$TOKEN" ]; then
-    echo "SKIP: token is empty, cannot call webhook API" >&2
-    return 0
-  fi
-  RESULT=$(curl -s \
-    -H "Authorization: Bearer $TOKEN" \
-    https://api.line.me/v2/bot/channel/webhook/endpoint 2>&1)
-  echo "$RESULT" | jq . 2>/dev/null || echo "$RESULT"
-  ACTIVE=$(echo "$RESULT" | jq -r '.active // "unknown"' 2>/dev/null)
-  WH_URL=$(echo "$RESULT" | jq -r '.webhookEndpointUrl // "unknown"' 2>/dev/null)
-  echo "Webhook active: $ACTIVE"
-  echo "Webhook URL:    $WH_URL"
-  echo ""
-}
-
-main() {
-  MODE="${1:-diagnose}"
-  check_deps
-  check_json_readable
-
-  case "$MODE" in
-    diagnose|full)
-      step1_status
-      step2_token_length
-      step3_token_api
-      step4_webhook
-      ;;
-    token-check)
-      step2_token_length
-      step3_token_api
-      ;;
-    webhook-check)
-      step4_webhook
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --json) JSON=1 ;;
+    --timeout) shift; TIMEOUT_MS="${1:-10000}" ;;
+    -h|--help)
+      echo "usage: $0 [--json] [--timeout <ms>]" >&2
+      exit 0
       ;;
     *)
-      usage
+      echo "unknown arg: $1" >&2
+      exit 2
       ;;
   esac
+  shift || true
+done
 
-  echo "=== Diagnosis complete ==="
-  echo "For repair steps, refer to SKILL.md Step 5."
+tmp_dir=$(mktemp -d)
+trap 'rm -rf "$tmp_dir"' EXIT
+
+channels_path="$tmp_dir/channels.json"
+gw_path="$tmp_dir/gateway.json"
+
+openclaw channels status --json --probe --timeout "$TIMEOUT_MS" >"$channels_path" 2>/dev/null || echo '{}' >"$channels_path"
+openclaw gateway status --json >"$gw_path" 2>/dev/null || echo '{}' >"$gw_path"
+
+python3 - "$channels_path" "$gw_path" "$JSON" <<'PY'
+import json,sys
+
+with open(sys.argv[1],'r',encoding='utf-8') as f:
+  channels=json.load(f)
+with open(sys.argv[2],'r',encoding='utf-8') as f:
+  gw=json.load(f)
+want_json=int(sys.argv[3])==1 if len(sys.argv)>3 else False
+
+# Heuristics:
+# - If LINE exists and probe ok and we have any recent inbound timestamps => OK.
+# - If stopped/restarting but probe ok and inbound recent => WARN (cosmetic).
+# - If probe fails or missing config => FAIL.
+
+items = channels.get('channels') or channels.get('items') or channels.get('data') or []
+
+line=None
+if isinstance(items, dict):
+  # openclaw channels status --json returns channels as a dict keyed by channel id
+  line = items.get('line')
+else:
+  for it in items:
+    if not isinstance(it, dict):
+      continue
+    ch=it.get('channel') or it.get('id') or it.get('name')
+    if ch=='line':
+      line=it
+      break
+
+report={
+  'status':'UNKNOWN',
+  'summary':'無法判斷（channels status JSON 格式可能變更）',
+  'details':{
+    'gateway': gw,
+    'line': line,
+  }
 }
 
-main "$@"
+def boolish(v):
+  if isinstance(v,bool): return v
+  if isinstance(v,str):
+    return v.lower() in ('true','1','yes','ok','pass')
+  return False
+
+if not line:
+  report['status']='FAIL'
+  report['summary']='找不到 line channel 設定（OpenClaw channels status 沒看到 line）。'
+else:
+  # pull common fields across versions
+  state=line.get('state') or line.get('status') or {}
+  enabled=line.get('enabled', True)
+  probe=line.get('probe') or line.get('probes') or {}
+
+  # possible indicators
+  probe_ok = None
+  for k in ('ok','pass','success','valid'):
+    if k in probe:
+      probe_ok = boolish(probe.get(k))
+      break
+  if probe_ok is None and isinstance(probe, dict):
+    # some versions: probe: { status: 'ok' }
+    s=probe.get('status')
+    if isinstance(s,str): probe_ok = (s.lower()=='ok')
+
+  # channel runtime
+  status_str = (line.get('runtimeStatus') or line.get('status') or line.get('lifecycle') or '')
+  if isinstance(status_str, dict):
+    status_str = status_str.get('state','')
+  status_str = str(status_str)
+
+  last_in = line.get('in') or line.get('lastInboundAt') or (line.get('activity') or {}).get('in')
+  last_out = line.get('out') or line.get('lastOutboundAt') or (line.get('activity') or {}).get('out')
+
+  # decide
+  if enabled is False:
+    report['status']='FAIL'
+    report['summary']='LINE channel 被停用（enabled=false）。'
+  elif probe_ok is False:
+    report['status']='FAIL'
+    report['summary']='LINE credential probe 失敗：可能是 token/webhook 設定錯或權限不對。'
+  elif probe_ok is True:
+    # If it looks stopped but probe ok, treat as cosmetic unless evidence of no inbound.
+    if 'stopped' in status_str.lower() or 'restart' in status_str.lower():
+      report['status']='WARN'
+      report['summary']='LINE 看起來是 stopped/restart loop，但 probe OK：多半是顯示/監控誤判（若你仍收得到訊息可忽略）。'
+    else:
+      report['status']='OK'
+      report['summary']='LINE probe OK，狀態看起來正常。'
+  else:
+    # probe not provided
+    report['status']='WARN'
+    report['summary']='LINE probe 資訊不足：已取得 channels status，但無法確認 credential 是否有效。'
+
+  report['details']['last_in']=last_in
+  report['details']['last_out']=last_out
+  report['details']['runtimeStatus']=status_str
+  report['details']['probe']=probe
+
+if want_json:
+  print(json.dumps(report,ensure_ascii=False,indent=2))
+else:
+  print(f"[{report['status']}] {report['summary']}")
+  d=report.get('details') or {}
+  if d.get('runtimeStatus'):
+    print(f"- runtime: {d['runtimeStatus']}")
+  if d.get('last_in'):
+    print(f"- last inbound: {d['last_in']}")
+  if d.get('last_out'):
+    print(f"- last outbound: {d['last_out']}")
+PY

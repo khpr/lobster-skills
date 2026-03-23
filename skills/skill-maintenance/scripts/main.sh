@@ -1,76 +1,112 @@
 #!/usr/bin/env bash
-# skill-maintenance/scripts/main.sh
-# Phase S3 implementation — run skill maintenance pipeline + parse report
-# bash 3.2 compatible
+# skill-maintenance: scan a skills directory and report common problems.
 set -euo pipefail
 
-SCRIPT_PATH="$HOME/.openclaw/workspace/scripts/skill-maintenance.sh"
-LOG_FILE="/tmp/skill-maintenance-$(date +%Y%m%d-%H%M%S).log"
+SKILLS_DIR="${SKILLS_DIR:-}"
+JSON=0
 
-usage() {
-  echo "Usage: $0 [--dry-run]"
-  echo "  --dry-run   只檢查前置條件，不實際執行"
-  exit 1
-}
-
-DRY_RUN=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --dry-run) DRY_RUN=1 ;;
-    -h|--help) usage ;;
-    *) echo "Unknown argument: $1" >&2; usage ;;
+    --json) JSON=1 ;;
+    -h|--help)
+      echo "usage: SKILLS_DIR=/path/to/skills $0 [--json]" >&2
+      exit 0
+      ;;
+    *)
+      echo "unknown arg: $1" >&2
+      exit 2
+      ;;
   esac
-  shift
+  shift || true
 done
 
-# 前置條件檢查
-if [ ! -f "$SCRIPT_PATH" ]; then
-  echo "ERROR: skill-maintenance.sh 不在預期路徑: $SCRIPT_PATH" >&2
-  exit 1
-fi
+[ -n "$SKILLS_DIR" ] || { echo "skill-maintenance: set SKILLS_DIR" >&2; exit 2; }
+[ -d "$SKILLS_DIR" ] || { echo "skill-maintenance: not a dir: $SKILLS_DIR" >&2; exit 2; }
 
-if [ $DRY_RUN -eq 1 ]; then
-  echo "DRY_RUN: 前置條件 OK，實際執行跳過"
-  exit 0
-fi
+python3 - "$SKILLS_DIR" "$JSON" <<'PY'
+import json, os, re, sys
 
-# 執行維護腳本，捕獲輸出
-echo "=== skill-maintenance 開始 $(date -u +%Y-%m-%dT%H:%M:%SZ) ===" | tee "$LOG_FILE"
-OUTPUT=$(bash "$SCRIPT_PATH" 2>&1 | tee -a "$LOG_FILE") || true
+skills_dir=sys.argv[1]
+want_json=int(sys.argv[2])==1
 
-echo "=== 腳本執行完畢 ===" | tee -a "$LOG_FILE"
+required_frontmatter=['name','description','version']
 
-# 解析 SKILL_MAINTENANCE_REPORT 區塊
-REPORT_SECTION=$(echo "$OUTPUT" | awk '/^SKILL_MAINTENANCE_REPORT/{found=1; next} found{print}' || true)
+results=[]
 
-if [ -z "$REPORT_SECTION" ]; then
-  echo "WARN: 未找到 SKILL_MAINTENANCE_REPORT，輸出原始 log" >&2
-  REPORT_SECTION="$OUTPUT"
-fi
+def read(p):
+  with open(p,'r',encoding='utf-8') as f:
+    return f.read()
 
-# 從 report 提取各欄位
-SYNC_STATUS=$(echo "$REPORT_SECTION" | grep "^sync:" | sed 's/^sync: //' || echo "unknown")
-HEALTH_STATUS=$(echo "$REPORT_SECTION" | grep "^health:" | sed 's/^health: //' || echo "unknown")
-FEEDBACK_STATUS=$(echo "$REPORT_SECTION" | grep "^feedback:" | sed 's/^feedback: //' || echo "unknown")
-STATS_STATUS=$(echo "$REPORT_SECTION" | grep "^stats:" | sed 's/^stats: //' || echo "unknown")
+def parse_frontmatter(md:str):
+  # super-light parser: only checks key presence in the top --- block
+  m=re.match(r"(?s)^---\n(.*?)\n---\n", md)
+  if not m:
+    return None
+  block=m.group(1)
+  keys=set()
+  for line in block.splitlines():
+    if re.match(r"^[A-Za-z0-9_\-]+\s*:\s*", line):
+      keys.add(line.split(':',1)[0].strip())
+  return keys
 
-# 判斷是否有 fail
-FAIL_NUM=$(echo "$HEALTH_STATUS" | grep -o "[0-9]* fail" | grep -o "[0-9]*" || echo "0")
+for name in sorted(os.listdir(skills_dir)):
+  sp=os.path.join(skills_dir,name)
+  if not os.path.isdir(sp):
+    continue
 
-# 輸出人類可讀摘要
-echo "---"
-echo "【Skill 維護完成】$(date '+%Y-%m-%d %H:%M')"
-echo "同步：$SYNC_STATUS"
-echo "健檢：$HEALTH_STATUS"
-echo "反饋：$FEEDBACK_STATUS"
-echo "統計：$STATS_STATUS"
+  item={
+    'skill': name,
+    'path': sp,
+    'ok': True,
+    'issues': []
+  }
 
-if [ "${FAIL_NUM:-0}" -gt 0 ] 2>/dev/null; then
-  echo ""
-  echo "⚠️ 發現 $FAIL_NUM 個 skill 失敗，請人工介入"
-  echo "詳細 log：$LOG_FILE"
-  exit 2
-fi
+  skill_md=os.path.join(sp,'SKILL.md')
+  if not os.path.isfile(skill_md):
+    item['ok']=False
+    item['issues'].append('missing SKILL.md')
+    results.append(item)
+    continue
 
-echo "LOG: $LOG_FILE"
-exit 0
+  md=read(skill_md)
+  fm=parse_frontmatter(md)
+  if fm is None:
+    item['ok']=False
+    item['issues'].append('missing YAML frontmatter (--- ... ---)')
+  else:
+    missing=[k for k in required_frontmatter if k not in fm]
+    if missing:
+      item['ok']=False
+      item['issues'].append('frontmatter missing keys: '+', '.join(missing))
+
+  scripts=os.path.join(sp,'scripts')
+  if os.path.isdir(scripts):
+    for fn in os.listdir(scripts):
+      if not fn.endswith('.sh'):
+        continue
+      fp=os.path.join(scripts,fn)
+      try:
+        st=os.stat(fp)
+        if (st.st_mode & 0o111)==0:
+          item['ok']=False
+          item['issues'].append(f'script not executable: scripts/{fn}')
+      except Exception as e:
+        item['ok']=False
+        item['issues'].append(f'cannot stat scripts/{fn}: {e}')
+
+  results.append(item)
+
+summary={
+  'skills': len([r for r in results if os.path.isdir(r['path'])]),
+  'pass': len([r for r in results if r['ok']]),
+  'fail': len([r for r in results if not r['ok']]),
+}
+
+if want_json:
+  print(json.dumps({'summary':summary,'results':results},ensure_ascii=False,indent=2))
+else:
+  print(f"SKILL 健檢：總數 {summary['skills']}｜Pass {summary['pass']}｜Fail {summary['fail']}")
+  for r in results:
+    if not r['ok']:
+      print(f"- {r['skill']}: " + '; '.join(r['issues']))
+PY
