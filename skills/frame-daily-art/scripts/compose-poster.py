@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 compose-poster.py — 將名畫合成黑框 InfoBar 海報（Frame TV 格式）
-規格：黑色背景、名畫縮放 95%、底部 InfoBar（畫名/作者/年份）
+規格：4K 直式 2160×3840、畫作置中、底部動態 InfoBar
+InfoBar 風格：深藍灰底色、Georgia Bold 標題（大寫）、Georgia 副標
 """
 import argparse
 import json
@@ -13,9 +14,8 @@ def main():
     parser.add_argument("--input", required=True, help="原始圖像路徑")
     parser.add_argument("--meta", required=True, help="meta JSON 路徑")
     parser.add_argument("--output", required=True, help="輸出路徑")
-    parser.add_argument("--scale", type=float, default=0.95)
-    parser.add_argument("--bg-color", default="#000000")
-    parser.add_argument("--infobar-height", type=int, default=80)
+    parser.add_argument("--scale", type=float, default=1.0, help="畫作縮放比（1.0=撐滿）")
+    parser.add_argument("--bg-color", default="0,0,0", help="背景 RGB，如 0,0,0")
     args = parser.parse_args()
 
     try:
@@ -27,74 +27,86 @@ def main():
     # Load meta
     with open(args.meta) as f:
         meta = json.load(f)
-    title = meta.get("title", "Untitled")
+    title = meta.get("title", "Untitled").upper()
     artist = meta.get("artist", "Unknown Artist")
     year = meta.get("year", "")
+    subtitle = f"{artist} · {year}" if year and year not in ("", "Unknown Year") else artist
 
     # Load source image
     src = Image.open(args.input).convert("RGB")
-    src_w, src_h = src.size
 
-    # Target canvas: keep portrait, e.g. 9:16 ~ 1080x1920 or use original dims
-    # We'll use original dims as canvas base
-    canvas_w = src_w
-    canvas_h = src_h + args.infobar_height
+    # 固定 4K 直式畫布
+    target_w, target_h = 2160, 3840
+    canvas = Image.new("RGB", (target_w, target_h), (0, 0, 0))
 
-    # Convert bg color
-    bg = tuple(int(args.bg_color.lstrip("#")[i:i+2], 16) for i in (0, 2, 4))
+    # Cover 模式：縮放到填滿整個畫布（超出部分裁切），不留黑邊
+    scale_w = target_w / src.width
+    scale_h = target_h / src.height
+    scale = max(scale_w, scale_h)
+    nw = int(src.width * scale)
+    nh = int(src.height * scale)
 
-    canvas = Image.new("RGB", (canvas_w, canvas_h), bg)
+    img_resized = src.resize((nw, nh), Image.Resampling.LANCZOS)
+    # 裁切置中
+    x = (nw - target_w) // 2
+    y = (nh - target_h) // 2
+    img_cropped = img_resized.crop((x, y, x + target_w, y + target_h))
+    canvas.paste(img_cropped, (0, 0))
 
-    # Scale image 95%, center it in top portion
-    scaled_w = int(src_w * args.scale)
-    scaled_h = int(src_h * args.scale)
-    src_scaled = src.resize((scaled_w, scaled_h), Image.LANCZOS)
+    # InfoBar 固定在畫布最底部，高度動態（畫布高 8%，至少 160px）
+    bar_h_calc = max(160, int(target_h * 0.08))
+    bar_top = target_h - bar_h_calc
 
-    offset_x = (canvas_w - scaled_w) // 2
-    offset_y = (src_h - scaled_h) // 2
-    canvas.paste(src_scaled, (offset_x, offset_y))
-
-    # Draw InfoBar at bottom
+    # InfoBar：半透明深色遮罩疊在畫作上（alpha composite）
+    overlay = Image.new("RGBA", (target_w, target_h), (0, 0, 0, 0))
+    ov_draw = ImageDraw.Draw(overlay)
+    ov_draw.rectangle([(0, bar_top), (target_w, target_h)], fill=(14, 16, 22, 210))
+    canvas = canvas.convert("RGBA")
+    canvas = Image.alpha_composite(canvas, overlay).convert("RGB")
     draw = ImageDraw.Draw(canvas)
-    bar_y = src_h
-    draw.rectangle([0, bar_y, canvas_w, canvas_h], fill=bg)
 
-    # Try to load a font
-    font_bold = None
-    font_regular = None
-    font_paths = [
+    # 字體：Georgia Bold / Georgia，按畫布比例
+    font_size_title = int(target_h * 0.020)   # ~76px
+    font_size_sub   = int(target_h * 0.012)   # ~46px
+    font_paths_bold = [
+        "/System/Library/Fonts/Supplemental/Georgia Bold.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
         "/System/Library/Fonts/Helvetica.ttc",
-        "/System/Library/Fonts/Arial.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     ]
-    for fp in font_paths:
-        if os.path.exists(fp):
-            try:
-                from PIL import ImageFont
-                font_bold = ImageFont.truetype(fp, 28)
-                font_regular = ImageFont.truetype(fp, 22)
-                break
-            except Exception:
-                pass
-    if not font_bold:
-        font_bold = ImageFont.load_default()
-        font_regular = font_bold
+    font_paths_reg = [
+        "/System/Library/Fonts/Supplemental/Georgia.ttf",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "/System/Library/Fonts/Helvetica.ttc",
+    ]
 
-    # InfoBar text
-    info_line1 = title
-    info_line2 = f"{artist}  ·  {year}" if year and year != "Unknown Year" else artist
+    def load_font(paths, size):
+        for p in paths:
+            if os.path.exists(p):
+                try:
+                    return ImageFont.truetype(p, size)
+                except Exception:
+                    pass
+        return ImageFont.load_default()
 
-    text_x = 30
-    text_y1 = bar_y + 12
-    text_y2 = bar_y + 46
+    f_title = load_font(font_paths_bold, font_size_title)
+    f_sub   = load_font(font_paths_reg,  font_size_sub)
 
-    draw.text((text_x, text_y1), info_line1, fill="white", font=font_bold)
-    draw.text((text_x, text_y2), info_line2, fill="#cccccc", font=font_regular)
+    margin = int(target_w * 0.05)
+    bar_h = target_h - bar_top
+    text_block_h = font_size_title + 8 + font_size_sub
+    label_y = bar_top + max(16, (bar_h - text_block_h) // 2)
 
-    # Save
+    draw.text((margin, label_y),                      title,    font=f_title, fill=(220, 220, 220))
+    draw.text((margin, label_y + font_size_title + 8), subtitle, font=f_sub,   fill=(150, 150, 150))
+
+    # 儲存，2MB 以下
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
-    canvas.save(args.output, "JPEG", quality=92)
-    print(f"Saved poster: {args.output} ({canvas_w}x{canvas_h})")
+    for quality in range(95, 50, -5):
+        canvas.save(args.output, "JPEG", quality=quality)
+        if os.path.getsize(args.output) <= 2_000_000:
+            break
+
+    print(f"Saved poster: {args.output} ({target_w}x{target_h})")
 
 if __name__ == "__main__":
     main()

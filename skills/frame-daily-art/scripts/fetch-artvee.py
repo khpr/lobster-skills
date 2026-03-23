@@ -37,19 +37,46 @@ def fetch_url(url, timeout=15):
         return None
 
 def parse_paintings(html_bytes):
-    """Simple parse: find product links and titles from Artvee HTML."""
+    """Parse Artvee product listings. New structure uses data-url on .product-element-top."""
     try:
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(html_bytes, "html.parser")
         results = []
         for item in soup.select(".product-element-top"):
-            a = item.find("a", href=True)
+            # New structure: data-url="/dl/slug", img alt=title
+            data_url = item.get("data-url")
             img = item.find("img")
-            if not a:
-                continue
-            href = a["href"]
             title = img.get("alt", "Untitled") if img else "Untitled"
-            results.append({"url": href, "title": title})
+
+            # Pre-filter using data-sk dimensions (avoid downloading to check ratio)
+            import json as _json
+            data_sk_raw = item.get("data-sk", "")
+            pre_ok = True
+            if data_sk_raw:
+                try:
+                    sk = _json.loads(data_sk_raw)
+                    for sz_key in ("hdlimagesize", "sdlimagesize"):
+                        sz = sk.get(sz_key, "")
+                        if "x" in sz:
+                            parts = sz.replace("px","").split("x")
+                            w, h = int(parts[0].strip()), int(parts[1].strip())
+                            if h / w < 1.2:
+                                pre_ok = False
+                            break
+                except Exception:
+                    pass
+
+            if not pre_ok:
+                continue
+
+            if data_url:
+                href = f"https://artvee.com{data_url}"
+                results.append({"url": href, "title": title})
+                continue
+            # Fallback: old structure with <a href>
+            a = item.find("a", href=True)
+            if a:
+                results.append({"url": a["href"], "title": title})
         return results
     except ImportError:
         log("bs4 not installed, falling back to regex")
@@ -65,21 +92,33 @@ def fetch_artwork_detail(page_url):
     try:
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(html, "html.parser")
-        # Try to get high-res image
-        img = soup.select_one(".woocommerce-product-gallery__image img")
-        if not img:
-            img = soup.select_one("img.wp-post-image")
-        img_url = None
-        if img:
-            img_url = img.get("data-large_image") or img.get("src")
+        # Try presigned SDL download link first (SD ~1800px, time-limited but fresh)
+        dl_link = soup.select_one('a[href*="mdl.artvee.com/sdl"]')
+        img_url = dl_link["href"] if dl_link else None
 
-        # Artist
-        artist_el = soup.select_one(".product_meta .artist a")
-        artist = artist_el.text.strip() if artist_el else "Unknown Artist"
+        # Fallback: sftb thumbnail (~800px)
+        if not img_url:
+            img = (soup.select_one(".woocommerce-product-gallery__image img") or
+                   soup.select_one("img.wp-post-image"))
+            if img:
+                src = img.get("src", "")
+                # Try to get sftb (larger than ft)
+                img_url = src if "mdl.artvee.com" in src else img.get("data-large_image") or src
 
-        # Year
-        year_el = soup.select_one(".product_meta .date")
-        year = year_el.text.strip() if year_el else "Unknown Year"
+        # Artist — try multiple selectors
+        artist_el = (soup.select_one(".tartist") or
+                     soup.select_one(".product_meta .artist a") or
+                     soup.select_one(".product-artist"))
+        artist_raw = artist_el.text.strip() if artist_el else "Unknown Artist"
+        # Clean up "Name (Nationality, YYYY-YYYY)" → keep just name
+        import re as _re
+        artist = _re.sub(r'\s*\([^)]*\)', '', artist_raw).strip() or artist_raw
+
+        # Year — try multiple selectors
+        year_el = (soup.select_one(".tdate") or
+                   soup.select_one(".product_meta .date") or
+                   soup.select_one(".product-date"))
+        year = year_el.text.strip() if year_el else ""
 
         title_el = soup.select_one("h1.product_title")
         title = title_el.text.strip() if title_el else "Untitled"
@@ -120,8 +159,10 @@ def main():
     for attempt in range(max_attempts):
         page_num = random.randint(1, 50)
         # 優先用 portraits/figurative，直式比例高；paintings 易被橫式系列佔滿
-        category = random.choice(["portraits", "figurative", "portraits", "religious"])
-        list_url = f"https://artvee.com/{category}/page/{page_num}/"
+        # Artvee 2026 新 URL 結構：/c/{category}/page/N/
+        # figurative=人物畫、mythology=神話、religion=宗教（直式多）
+        category = random.choice(["figurative", "figurative", "mythology", "religion"])
+        list_url = f"https://artvee.com/c/{category}/page/{page_num}/"
         log(f"Attempt {attempt+1}: fetching {list_url}")
         html = fetch_url(list_url)
         if not html:
@@ -131,6 +172,11 @@ def main():
         paintings = parse_paintings(html)
         random.shuffle(paintings)
         log(f"Found {len(paintings)} candidates on page {page_num}")
+
+        # 過濾明顯非畫作的標題（歷史服裝圖鑑、舞台設計、年代範圍標示）
+        SKIP_KEYWORDS = ["Maquettes", "1876-1888", "1895-1911", "costumes", "Costumes",
+                         "siecle", "mobiliers", "instruments", "Harper's", "McClure's"]
+        paintings = [p for p in paintings if not any(kw in p["title"] for kw in SKIP_KEYWORDS)]
 
         for p in paintings:
             if p["title"] in used:

@@ -31,8 +31,8 @@ log "Starting frame-daily-art for $TODAY"
 # Step 1: Fetch from Artvee
 log "Step 1: Fetching artwork from Artvee..."
 python3 "$SKILL_DIR/scripts/fetch-artvee.py" \
-  --min-px 2000 \
-  --portrait-ratio 1.3 \
+  --min-px 1200 \
+  --portrait-ratio 1.2 \
   --exclude-log "$USED_LOG" \
   --output "$TMP_RAW" \
   --meta "$TMP_META" \
@@ -51,9 +51,6 @@ python3 "$SKILL_DIR/scripts/compose-poster.py" \
   --input "$TMP_RAW" \
   --meta "$TMP_META" \
   --output "$OUTPUT_PATH" \
-  --scale 0.95 \
-  --bg-color "#000000" \
-  --infobar-height 80 \
   || die "compose-poster.py failed"
 
 # Step 3: Upload to Frame TV

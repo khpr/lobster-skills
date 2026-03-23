@@ -61,10 +61,8 @@ mkdir -p "$(dirname "$OUTPUT_PATH")"
 python3 scripts/compose-poster.py \
   --input /tmp/frame-art-raw.jpg \
   --meta /tmp/frame-art-meta.json \
-  --output "$OUTPUT_PATH" \
-  --scale 0.95 \
-  --bg-color "#000000" \
-  --infobar-height 80
+  --output "$OUTPUT_PATH"
+# 輸出固定 4K (2160×3840)，InfoBar 動態高度，Georgia Bold 字體
 ```
 
 compose-poster.py 流程：
