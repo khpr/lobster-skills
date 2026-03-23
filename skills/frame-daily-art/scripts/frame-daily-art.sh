@@ -55,11 +55,14 @@ python3 "$SKILL_DIR/scripts/compose-poster.py" \
 
 # Step 3: Upload to Frame TV
 log "Step 3: Uploading to Frame TV..."
+WAKE_UPLOAD="$HOME/.openclaw/skills/samsung-smartthings/scripts/wake_and_upload.py"
 UPLOAD_SCRIPT="$HOME/.openclaw/skills/samsung-smartthings/scripts/upload_to_frame.py"
-if [ -f "$UPLOAD_SCRIPT" ]; then
+if [ -f "$WAKE_UPLOAD" ]; then
+  python3 "$WAKE_UPLOAD" "$OUTPUT_PATH" 2>&1 || log "WARN: Frame TV upload failed after wake attempt"
+elif [ -f "$UPLOAD_SCRIPT" ]; then
   python3 "$UPLOAD_SCRIPT" "$OUTPUT_PATH" 2>&1 || log "WARN: Frame TV upload failed (TV may be offline)"
 else
-  log "WARN: upload_to_frame.py not found, skipping TV upload"
+  log "WARN: upload script not found, skipping TV upload"
 fi
 
 # Step 4: Record used artwork
