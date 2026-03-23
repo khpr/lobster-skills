@@ -1,12 +1,9 @@
 ---
 name: memory-handoff-sync
 description: >
-  把 BOOT/交接摘要自動整理進 MEMORY.md，讓重啟後的主 agent 能快速接續上下文。
-  目標是「不靠腦記、靠檔案交接」，並且做到可重複執行（idempotent）。
-trigger_phrases:
-  - 記憶交接
-  - 同步記憶
-  - handoff sync
+  把 BOOT/交接摘要寫進當日 daily 記憶（memory/YYYY-MM-DD.md），避免污染長期精選的 MEMORY.md。
+  可選擇 --promote 才將摘要晉升進 MEMORY.md。目標是「不靠腦記、靠檔案交接」，可重複執行（idempotent）。
+  觸發：記憶交接 / 同步記憶 / handoff sync。
 requires:
   bins: [python3]
   env: [OPENCLAW_WORKSPACE]

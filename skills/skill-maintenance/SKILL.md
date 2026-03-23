@@ -3,11 +3,7 @@ name: skill-maintenance
 description: >
   技能庫健檢與整理：掃描 skills/ 目錄，抓出缺檔、frontmatter 不完整、版本欄位缺失、
   scripts 權限問題等常見地雷，輸出一份清單（可作為 PR 前的自動檢查）。
-trigger_phrases:
-  - skill 健檢
-  - skills 健檢
-  - 檢查技能
-  - skill maintenance
+  觸發：skill 健檢 / skills 健檢 / 檢查技能 / skill maintenance。
 requires:
   bins: [python3]
   env: [SKILLS_DIR]

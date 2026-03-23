@@ -3,11 +3,7 @@ name: line-channel-config-check
 description: >
   檢查 OpenClaw 的 LINE Channel 設定與實際收發狀態，避免被 CLI 的 stopped / restart loop 誤報嚇到。
   會把「顯示問題」和「真的收不到訊息」分開判斷，並輸出一份白話的健康報告。
-trigger_phrases:
-  - LINE 狀態
-  - LINE 健檢
-  - 檢查 LINE
-  - line channel check
+  觸發：LINE 狀態 / LINE 健檢 / 檢查 LINE / line channel check。
 requires:
   bins: [openclaw, python3]
   env: []
