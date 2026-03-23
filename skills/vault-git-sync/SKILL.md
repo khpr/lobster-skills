@@ -5,11 +5,11 @@ description: >
   觸發關鍵詞：同步 Vault、備份 Vault、Vault commit、存筆記到 git、vault-git-sync、
   Obsidian 備份、手動 git commit Vault、我想存一下筆記。
   也可由 cron 定時呼叫（不需用戶觸發）。
-  執行 ~/.openclaw/workspace/scripts/vault-auto-commit.sh，
+  執行 skills/vault-git-sync/scripts/main.sh（不寫死 workspace 路徑），
   有變更就 commit，沒有就靜默結束。
 requires:
   bins: [git]
-  env: []
+  env: [OBSIDIAN_VAULT_DIR, VAULT_GIT_SYNC_ALLOW_PUSH]
   config: []
 owner: shared
 complexity: S
@@ -21,7 +21,7 @@ created: "2026-03-22"
 
 封裝現有 `vault-auto-commit.sh` 腳本為 skill，讓龍蝦/小蝦都能一鍵觸發 Obsidian Vault 的 git auto-backup。
 
-腳本路徑：`~/.openclaw/workspace/scripts/vault-auto-commit.sh`
+腳本路徑：`skills/vault-git-sync/scripts/main.sh`
 
 ## 前置條件
 
@@ -34,7 +34,7 @@ created: "2026-03-22"
 ### Step 1：執行腳本
 
 ```bash
-bash ~/.openclaw/workspace/scripts/vault-auto-commit.sh
+bash scripts/main.sh sync
 EXIT=$?
 ```
 
@@ -75,5 +75,5 @@ fi
 
 ## 參考文件
 
-- 腳本本體：`~/.openclaw/workspace/scripts/vault-auto-commit.sh`
+- 腳本本體：`scripts/main.sh`
 - Vault 路徑：`~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Obsidian Vault`

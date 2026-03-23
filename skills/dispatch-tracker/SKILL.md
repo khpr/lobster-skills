@@ -5,10 +5,10 @@ description: >
   支援 add（登記新派工）、done（標記完成）、list（列出所有）、check（啟動健檢）。
   觸發情境：派工前後、session 啟動、派工追蹤、查有沒有未完成工作、check dispatch、
   登記派工、標記派工完成、查派工簿。
-  Owner: shared；腳本已存在於 ~/.openclaw/workspace/scripts/dispatch-tracker.sh。
+  Owner: shared；使用 skills/dispatch-tracker/scripts/main.sh（不寫死 workspace 路徑）。
 requires:
   bins: [bash, grep, sed]
-  env: []
+  env: [OPENCLAW_WORKSPACE]
   config: []
 owner: shared
 complexity: S
@@ -23,15 +23,14 @@ created: "2026-03-22"
 
 ## 前置條件
 
-- `~/.openclaw/workspace/scripts/dispatch-tracker.sh` 必須存在（已存在）
-- 追蹤簿路徑：`~/.openclaw/workspace-lobster/memory/pending-dispatches.md`
+- 追蹤簿路徑（預設）：`$OPENCLAW_WORKSPACE/memory/pending-dispatches.md`
 
 ## 流程
 
 ### 每個 Turn 啟動
 
 ```bash
-bash ~/.openclaw/workspace/scripts/dispatch-tracker.sh check
+OPENCLAW_WORKSPACE=~/.openclaw/workspace bash scripts/main.sh check
 ```
 
 有輸出（未完成派工）→ 主動報告給使用者，並用 `subagents list` 查進度。
@@ -39,19 +38,19 @@ bash ~/.openclaw/workspace/scripts/dispatch-tracker.sh check
 ### 派工前
 
 ```bash
-bash ~/.openclaw/workspace/scripts/dispatch-tracker.sh add "<agent>" "<任務摘要>" [V卡ID]
+OPENCLAW_WORKSPACE=~/.openclaw/workspace bash scripts/main.sh add "<agent>" "<任務摘要>" [V卡ID]
 ```
 
 ### 收到結果後
 
 ```bash
-bash ~/.openclaw/workspace/scripts/dispatch-tracker.sh done "<agent>" "<關鍵字>"
+OPENCLAW_WORKSPACE=~/.openclaw/workspace bash scripts/main.sh done "<關鍵字>"
 ```
 
 ### 查看派工簿
 
 ```bash
-bash ~/.openclaw/workspace/scripts/dispatch-tracker.sh list
+OPENCLAW_WORKSPACE=~/.openclaw/workspace bash scripts/main.sh list
 ```
 
 ## 輸出規範
